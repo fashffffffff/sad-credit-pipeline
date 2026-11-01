@@ -1,0 +1,37 @@
+[project]
+name = "sad-credit-pipeline"
+version = "0.1.0"
+description = "Кредитный конвейер: заявка -> СМЭВ -> БКИ -> ML-скоринг -> решение (команда SAD)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    # веб и API
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "httpx>=0.27",
+    "pydantic>=2.8",
+    "pyjwt>=2.9",
+    "bcrypt>=4.2",
+    "sse-starlette>=2.1",
+    # ML
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "scikit-learn>=1.5",
+    "catboost>=1.2.7",
+    "shap>=0.46",
+    "joblib>=1.4",
+    "openml>=0.15",
+]
+
+[dependency-groups]
+challenger = [
+    "tabicl>=2.2.0",
+]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "rich>=13.8",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests", "emulators/tests", "ml/tests"]
+asyncio_mode = "auto"

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Кобальтовая плашка, белый конверт-заявка и лаймовый штамп «одобрено» — как финал нашего конвейера -->
+  <rect width="32" height="32" rx="8" fill="#2F3BFF"/>
+  <rect x="5" y="8.5" width="17" height="12.5" rx="2" fill="#F4F1EA"/>
+  <path d="M5.8 9.6 13.5 15.3 21.2 9.6" fill="none" stroke="#2F3BFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="21.5" cy="20.5" r="7" fill="#D9F45B" stroke="#2F3BFF" stroke-width="1.6"/>
+  <path d="M18.4 20.6 20.6 22.8 24.7 18.4" fill="none" stroke="#15171A" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

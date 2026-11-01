@@ -1,0 +1,63 @@
+# Запуск: docker compose up --build   → http://localhost:8080 (порт: FRONT_PORT)
+# Секреты по умолчанию — демонстрационные (значения по умолчанию из кода). Свои задаёт файл .env рядом или переменные окружения.
+# Боевой запуск: APP_ENV=production docker compose up — со слабыми секретами сервисы откажутся стартовать.
+x-python: &python
+  build: .
+  restart: unless-stopped
+
+services:
+  smev:
+    <<: *python
+    command: uvicorn emulators.app.smev:app --host 0.0.0.0 --port 8101
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      SMEV_HMAC_SECRET: ${SMEV_HMAC_SECRET:-dev-smev-secret}
+      # /chaos пускаем только из сети compose (туда входит backend)
+      CHAOS_ALLOW_NETS: 172.30.0.0/24
+
+  bki:
+    <<: *python
+    command: uvicorn emulators.app.bki:app --host 0.0.0.0 --port 8102
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      BKI_HMAC_SECRET: ${BKI_HMAC_SECRET:-dev-bki-secret}
+      BKI_POOL_PATH: /app/ml/artifacts/bki_pool.parquet
+      CHAOS_ALLOW_NETS: 172.30.0.0/24
+
+  backend:
+    <<: *python
+    # --forwarded-allow-ips: верим заголовку X-Forwarded-For только от nginx из сети compose. Без этого все клиенты
+    # выглядят как один IP (адрес nginx), и лимит «10 попыток входа в минуту с IP» блокирует всех сразу
+    command: uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips 172.30.0.0/24
+    environment:
+      SMEV_URL: http://smev:8101
+      BKI_URL: http://bki:8102
+      APP_ENV: ${APP_ENV:-development}
+      SMEV_HMAC_SECRET: ${SMEV_HMAC_SECRET:-dev-smev-secret}
+      BKI_HMAC_SECRET: ${BKI_HMAC_SECRET:-dev-bki-secret}
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-me}
+      PII_PEPPER: ${PII_PEPPER:-dev-pii-pepper}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      # учётки генерируются при первом запуске в томе с базой: docker compose exec backend cat /data/credentials.local.md
+      CREDENTIALS_FILE: /data/credentials.local.json
+      DATABASE_PATH: /data/app.db
+    volumes: ["backend-data:/data"]   # база переживает перезапуск
+    depends_on: [smev, bki]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/api/health"]
+      interval: 5s
+      retries: 20
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on: [backend]
+    ports: ["${FRONT_PORT:-8080}:80"]   # наружу только фронт; остальное — внутри сети compose
+
+volumes:
+  backend-data:
+
+networks:
+  default:
+    ipam:
+      config: [{subnet: 172.30.0.0/24}]
