@@ -16,6 +16,7 @@ from backend.app.state import AppState
 # мы такие данные не собираем (минимизация ПДн, запрет дискриминации)
 FORM_FIELDS = ("passport_hash", "age", "income", "employment", "family", "amount", "term", "product_id")
 ALLOWED_KEYS = set(FORM_FIELDS) | {"client_device_id"}
+MAX_INCOME = 1_000_000_000  # ₽ в месяц: больше — заведомо мусор (и не влезает в SQLite)
 DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
 
 
@@ -29,6 +30,12 @@ def parse_form(body, need_passport: bool = True) -> tuple[Application, str | Non
     device = body.get("client_device_id")
     if device is not None and not (isinstance(device, str) and DEVICE_ID_RE.match(device)):
         raise field_error({"client_device_id": "До 64 символов: латинские буквы, цифры и . _ : -"})
+    # credit_core ждёт строки там, где строки: мусор другого типа (число, список) отсекаем здесь, а не падаем с 500
+    for name, code in (("passport_hash", "INVALID_PASSPORT_HASH"), ("employment", "INVALID_EMPLOYMENT"),
+                       ("family", "INVALID_FAMILY"), ("product_id", "UNKNOWN_PRODUCT")):
+        if body.get(name) is not None and not isinstance(body[name], str):
+            message = credit_core.FIELD_ERRORS[code]
+            raise ApiError(422, code, message, details={"fields": {name: message}})
     app = Application(app_id="", passport_hash=body.get("passport_hash") if need_passport else None,
                       age=body.get("age"), income=body.get("income"), employment=body.get("employment"),
                       family=body.get("family"), amount=body.get("amount"), term=body.get("term"),
@@ -37,6 +44,9 @@ def parse_form(body, need_passport: bool = True) -> tuple[Application, str | Non
         message = credit_core.FIELD_ERRORS["INVALID_PASSPORT_HASH"]
         raise ApiError(422, "INVALID_PASSPORT_HASH", message, details={"fields": {"passport_hash": message}})
     errors = credit_core.validate_for_api(app)
+    income = app.income
+    if not errors and isinstance(income, (int, float)) and not (income <= MAX_INCOME):  # ядро верхней границы не знает
+        errors = [credit_core.FieldError("income", "INVALID_INCOME", credit_core.FIELD_ERRORS["INVALID_INCOME"])]
     if errors:
         first = errors[0]
         details = {"fields": {e.field: e.message for e in errors}}

@@ -146,7 +146,7 @@ def build_certificate(settings: Settings, d_row, app_row, phone_masked: str) -> 
     pdf.cell(0, 7, text(f"по кредитной заявке {payload['app_id']}"), new_x="LMARGIN", new_y="NEXT")
     pdf.ln(4)
     rows = [("Решение", "Одобрено (предварительно)"),
-            ("Сумма", f"{money(payload['amount_approved'])} ₽"),
+            ("Сумма", f"{money(payload["amount_approved"])} руб."),
             ("Срок", f"{payload['term_approved']} мес."),
             ("Ставка", f"{payload['rate'] * 100:g}% годовых"),
             ("Продукт", payload["product_id"]),

@@ -1,115 +1,125 @@
-"""Остальные ручки: what-if, статистика, симуляция, хаос-прокси, health, генератор анкет."""
+"""Здоровье, продукты, расчёт quote, модель, статистика, хаос-прокси, демо-ручки аудита, SSE."""
 
-import random
+import json
 
 import httpx
 
-from backend.app.schemas import ApplicationIn, inn10_is_valid
-from backend.app.simulate import random_application
-from backend.tests.conftest import GOOD_BKI, good_form
-
-
-def test_inn_checksum():
-    """Ожидаемый результат: настоящий ИНН Сбера проходит, с изменённой последней цифрой — нет."""
-    assert inn10_is_valid("7707083893")
-    assert not inn10_is_valid("7707083890")
-    assert not inn10_is_valid("770708389")
-
-
-def test_random_applications_are_valid():
-    """Ожидаемый результат: 300 сгенерированных анкет проходят те же правила валидации, что и ручной ввод."""
-    rng = random.Random(1)
-    for _ in range(300):
-        ApplicationIn.model_validate(random_application(rng))
-
-
-async def test_whatif_and_model_info(env, operator):
-    """Ожидаемый результат: what-if возвращает pd/score/contributions без сохранения заявки;
-    не хватает признака -> 422; /model/info отдаёт метрики."""
-    features = {"n_loans": 3, "bad_months": 1, "has_current_overdue": 0}
-    resp = await env.client.post("/api/score/whatif", json=features, headers=operator)
-    assert resp.status_code == 200 and resp.json()["score"] == 740
-    assert resp.json()["contributions"][0]["feature"] == "bad_months"
-    assert env.state.db.query_one("SELECT COUNT(*) AS c FROM applications")["c"] == 0
-
-    del features["n_loans"]
-    bad = await env.client.post("/api/score/whatif", json=features, headers=operator)
-    assert bad.status_code == 422 and "n_loans" in bad.json()["fields"]
-    features["n_loans"] = "много"
-    assert (await env.client.post("/api/score/whatif", json=features, headers=operator)).status_code == 422
-    assert (await env.client.get("/api/model/info", headers=operator)).json()["roc_auc"] == 0.86
-
-
-async def test_model_features_endpoint(env, operator):
-    """Ожидаемый результат: /api/model/features отдаёт feature_specs и paym_codes модели (для ползунков и тепловой карты)."""
-    body = (await env.client.get("/api/model/features", headers=operator)).json()
-    assert [s["feature"] for s in body["feature_specs"]] == ["n_loans", "bad_months", "has_current_overdue"]
-    assert "0" in body["paym_codes"]
-
-
-async def test_simulate_and_stats(env):
-    """Ожидаемый результат: /simulate принимает count и запускает заявки в фоне; потом статистика
-    показывает total=count, все заявки вышли из processing, сумма by_status сходится."""
-    admin = await env.login("admin")
-    resp = await env.client.post("/api/simulate", json={"count": 12}, headers=admin)
-    assert resp.status_code == 202
-    await env.drain()
-    stats = (await env.client.get("/api/stats", headers=admin)).json()
-    assert stats["total"] == 12
-    assert stats["by_status"]["processing"] == 0
-    assert sum(stats["by_status"].values()) == 12
-    assert len(stats["score_histogram"]["counts"]) == len(stats["score_histogram"]["bins"]) - 1
-    assert (await env.client.post("/api/simulate", json={"count": 301}, headers=admin)).status_code == 422
-
-
-async def test_chaos_proxy_writes_audit_and_event(env):
-    """Ожидаемый результат: PUT /chaos/smev проксируется к эмулятору, меняет режим в /stats,
-    пишет chaos_change в аудит и шлёт SSE-событие chaos."""
-    sent = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.method == "PUT":
-            sent.update(__import__("json").loads(request.content))
-            return httpx.Response(200, json=sent)
-        return httpx.Response(200, json={"mode": "normal", "delay_ms": 0})
-
-    env.state.smev.http = httpx.AsyncClient(base_url="http://smev", transport=httpx.MockTransport(handler))
-    admin = await env.login("admin")
-    queue = env.state.bus.subscribe()
-    resp = await env.client.put("/api/chaos/smev", json={"mode": "slow", "delay_ms": 4000}, headers=admin)
-    assert resp.status_code == 200 and sent["mode"] == "slow"
-    assert (await env.client.get("/api/stats", headers=admin)).json()["services"]["smev"] == "slow"
-    assert queue.get_nowait() == ("chaos", {"service": "smev", "mode": "slow"})
-    actions = [r["action"] for r in env.state.db.query_all("SELECT action FROM audit_log")]
-    assert "chaos_change" in actions
-    assert (await env.client.get("/api/chaos/other", headers=admin)).status_code == 404
-
-
-async def test_events_stream_requires_token(env):
-    """Ожидаемый результат: SSE без токена или с чужим токеном -> 401."""
-    assert (await env.client.get("/api/events/stream")).status_code == 401
-    assert (await env.client.get("/api/events/stream?token=fake")).status_code == 401
+from backend.app import audit
+from backend.app.factory import create_app
+from backend.tests.conftest import FakeModel, TEST_CREDENTIALS, World, good_form, make_env, make_transport
 
 
 async def test_health_reports_services(env):
-    """Ожидаемый результат: все три компонента доступны."""
-    health = (await env.client.get("/api/health")).json()
-    assert health["backend"] == "ok" and health["smev"] == "up" and health["bki"] == "up"
-    assert health["model"] == "ready"
+    for path in ("/health", "/api/v1/health"):
+        body = (await env.client.get(path)).json()
+        assert body == {"status": "ok", "services": {"smev": "up", "bki": "up", "tokenizer": "up", "model": "ready"}}
 
 
-async def test_many_inquiries_goes_to_manual_review(env, operator):
-    """Клиент с 5+ запросами в БКИ за 30 дней.
-
-    Ожидаемый результат: manual_review с причиной MANY_INQUIRIES, хотя балл высокий.
-    """
-    env.world.bki_override["4510 333333"] = GOOD_BKI | {"inquiries_30d": 6}
-    app = await env.run_and_get(good_form(passport="4510 333333"), operator)
-    assert app["status"] == "manual_review" and app["reasons"][0]["code"] == "MANY_INQUIRIES"
+async def test_health_degraded_when_model_missing(env_no_model):
+    body = (await env_no_model.client.get("/api/v1/health")).json()
+    assert body["status"] == "degraded" and body["services"]["model"] == "unavailable"
 
 
-async def test_cors_allows_frontend(env):
-    """Ожидаемый результат: preflight с http://localhost:5173 разрешён."""
-    resp = await env.client.options("/api/applications", headers={
-        "Origin": "http://localhost:5173", "Access-Control-Request-Method": "POST"})
-    assert resp.headers["access-control-allow-origin"] == "http://localhost:5173"
+async def test_products_and_quote(env, client, uw):
+    products = (await env.client.get("/api/v1/products", headers=client)).json()
+    assert {p["product_id"] for p in products} == {"prod_standard", "prod_premium", "prod_student", "prod_pension", "prod_express"}
+    form = {k: v for k, v in good_form().items() if k != "passport_hash"}
+    q = (await env.client.post("/api/v1/quote", json=form, headers=client)).json()
+    assert q["dti"] == 0.21 and q["monthly_payment"] == 24962 and q["partial_score"] == 80 and q["max_partial_score"] == 90
+    assert q["blocking"] == [] and "prod_standard" in {p["product_id"] for p in q["eligible_products"]}
+    assert env.state.db.query_one("SELECT COUNT(*) AS n FROM applications")["n"] == 0  # ничего не сохраняется
+    low = (await env.client.post("/api/v1/quote", json=form | {"income": 20000}, headers=client)).json()
+    assert low["blocking"] and low["dti"] is None
+    high = (await env.client.post("/api/v1/quote", json=form | {"income": 50000, "term": 12}, headers=client)).json()
+    assert high["blocking"] == ["HIGH_DTI"] and high["dti"] > 0.5
+    assert (await env.client.post("/api/v1/quote", json=form | {"employment": "unemployed"}, headers=client)).json()["blocking"] == ["INVALID_EMPLOYMENT"]
+    assert (await env.client.post("/api/v1/quote", json=form, headers=uw)).status_code == 403
+
+
+async def test_model_info_and_features(env, uw, auditor):
+    for headers in (uw, auditor):
+        assert (await env.client.get("/api/v1/model/info", headers=headers)).json()["roc_auc"] == 0.86
+        assert "feature_specs" in (await env.client.get("/api/v1/model/features", headers=headers)).json()
+
+
+async def test_stats_by_status_and_reason(env, client, uw):
+    env.state.settings.duplicate_check = False
+    await env.run(good_form(), client)
+    env.world.bki_default = {"score": 400, "delinquency": True, "requests_90d": 1}
+    await env.run(good_form(), client)
+    stats = (await env.client.get("/api/v1/stats", headers=uw)).json()
+    assert stats["total"] == 2 and stats["by_status"]["APPROVED"] == 1 and stats["by_status"]["REFUSED"] == 1
+    assert stats["by_reason"] == {"BKI_DELINQUENCY": 1} and stats["approval_rate"] == 0.5
+
+
+async def chaos_env(tmp_path):
+    """Приложение с фейковым СМЭВ, который умеет GET/PUT /chaos, как настоящий Go-сервис."""
+    state = {"mode": "normal", "delay_ms": 0}
+    from backend.app.config import Settings
+    settings = Settings(database_path=str(tmp_path / "c.sqlite"), external_log="", cert_key_file=str(tmp_path / "k"),
+                        stage_delay_ms=0, retry_delays=(0,), bcrypt_rounds=4, auto_retry_seconds=0)
+    inner = make_transport("smev", settings.smev_secret, World())
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/chaos":
+            if request.method == "PUT":
+                state.update(json.loads(request.content))
+            return httpx.Response(200, json=dict(state))
+        return inner.handler(request)
+
+    app = create_app(settings, smev_transport=httpx.MockTransport(handler), model_loader=FakeModel, credentials=TEST_CREDENTIALS)
+    return app, httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test"), state
+
+
+async def test_chaos_proxy_writes_audit_and_event(tmp_path):
+    app, http, state = await chaos_env(tmp_path)
+    admin_token = (await http.post("/api/v1/auth/staff/login", json={"username": "admin", "password": "test-only-admin-pw-x9Q2"})).json()["access_token"]
+    admin = {"Authorization": f"Bearer {admin_token}"}
+    ctx = app.state.ctx
+    q = ctx.bus.subscribe("admin", "admin")
+    r = await http.put("/api/v1/chaos/smev", json={"mode": "slow", "delay_ms": 4000}, headers=admin)
+    assert r.status_code == 200 and state["mode"] == "slow"
+    assert (await http.get("/api/v1/chaos/smev", headers=admin)).json()["mode"] == "slow"
+    assert q.get_nowait() == ("chaos", {"service": "smev", "mode": "slow"})
+    rec = audit.list_records(ctx.db)[0]
+    assert rec["action"] == "chaos_changed" and rec["actor"] == "admin" and rec["details"]["mode"] == "slow"
+    # белый список полей, неизвестный сервис, неизвестный режим
+    assert (await http.put("/api/v1/chaos/smev", json={"mode": "slow", "evil": "x" * 1000}, headers=admin)).status_code == 422
+    assert (await http.put("/api/v1/chaos/smev", json={"mode": "boom"}, headers=admin)).status_code == 422
+    assert (await http.get("/api/v1/chaos/passport", headers=admin)).status_code == 404
+    assert state["mode"] == "slow"
+    await http.aclose()
+
+
+async def test_chaos_when_service_is_down(env, admin):
+    # у фейкового БКИ из conftest нет /chaos → 404 от сервиса → backend отвечает 502 в формате Error
+    r = await env.client.get("/api/v1/chaos/bki", headers=admin)
+    assert r.status_code == 502 and r.json()["retryable"] is True
+
+
+async def test_demo_tamper_and_restore_audit(env, client, admin, auditor, uw):
+    await env.run(good_form(), client)
+    assert (await env.client.get("/api/v1/audit/verify", headers=auditor)).json()["ok"] is True
+    r = await env.client.post("/api/v1/demo/tamper-audit", headers=admin)
+    assert r.status_code == 200
+    broken = (await env.client.get("/api/v1/audit/verify", headers=auditor)).json()
+    assert broken["ok"] is False and f"evt_{broken['broken_at']:04d}" == r.json()["tampered"]
+    assert (await env.client.post("/api/v1/demo/tamper-audit", headers=admin)).status_code == 409  # уже подделано
+    assert (await env.client.post("/api/v1/demo/restore-audit", headers=admin)).status_code == 200
+    assert (await env.client.get("/api/v1/audit/verify", headers=auditor)).json()["ok"] is True
+    assert (await env.client.post("/api/v1/demo/restore-audit", headers=admin)).status_code == 409
+    assert (await env.client.post("/api/v1/demo/tamper-audit", headers=uw)).status_code == 403
+
+
+async def test_demo_handles_closed_in_production(tmp_path):
+    e = make_env(tmp_path, production=True)
+    admin = await e.login("admin")
+    for path in ("tamper-audit", "restore-audit"):
+        assert (await e.client.post(f"/api/v1/demo/{path}", headers=admin)).status_code == 404
+    await e.client.aclose()
+
+
+async def test_events_stream_requires_ticket_and_old_paths_are_gone(env, uw):
+    assert (await env.client.get("/api/v1/events/stream")).status_code == 401
+    for old in ("/api/applications", "/api/auth/login", "/api/health"):
+        assert (await env.client.get(old, headers=uw)).status_code == 404
