@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Запуск всей системы на маке без Docker: СМЭВ, БКИ, backend, frontend.
+# Запуск всей системы на маке без Docker: Go-сервисы (СМЭВ, БКИ, токенизатор паспорта), backend, frontend.
 #   scripts/run.sh          — всё целиком
 #   scripts/run.sh --mock   — только фронт на заглушках (страховка на защите)
 # Ctrl+C останавливает всё.
@@ -12,10 +12,13 @@ if [[ -f .env ]]; then set -a; source .env; set +a; fi
 # порты можно переопределить: BACKEND_PORT=8400 FRONT_PORT=8403 scripts/run.sh
 SMEV_PORT=${SMEV_PORT:-8101}
 BKI_PORT=${BKI_PORT:-8102}
+TOKENIZER_PORT=${TOKENIZER_PORT:-8103}
 BACKEND_PORT=${BACKEND_PORT:-8000}
 FRONT_PORT=${FRONT_PORT:-5173}
 export BACKEND_PORT FRONT_PORT           # vite-прокси читает их из окружения
+export SMEV_PORT BKI_PORT TOKENIZER_PORT # Go-сервисы читают порты из окружения
 export SMEV_URL="http://127.0.0.1:$SMEV_PORT" BKI_URL="http://127.0.0.1:$BKI_PORT"  # адреса для backend
+export TOKENIZER_URL="http://127.0.0.1:$TOKENIZER_PORT"
 
 need() { command -v "$1" >/dev/null || { echo "Не найден '$1'. $2"; exit 1; }; }
 need npm "Поставьте Node.js: brew install node"
@@ -32,8 +35,11 @@ if [[ "${1:-}" == "--mock" ]]; then
 fi
 
 need uv "Поставьте uv: brew install uv"
+need go "Поставьте Go: brew install go"
 echo "→ uv sync"
 uv sync --quiet
+echo "→ go build (СМЭВ, БКИ, токенизатор → bin/)"
+(cd services && go build -o ../bin/ ./cmd/...)
 
 LOGS="$PWD/logs"
 mkdir -p "$LOGS"
@@ -56,7 +62,7 @@ cleanup() {
 trap cleanup INT TERM EXIT
 
 # занят ли порт — лучше сказать сразу, чем искать причину в логах
-for port in $SMEV_PORT $BKI_PORT $BACKEND_PORT $FRONT_PORT; do
+for port in $SMEV_PORT $BKI_PORT $TOKENIZER_PORT $BACKEND_PORT $FRONT_PORT; do
   if lsof -ti tcp:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
     echo "Порт $port занят. Освободите его или выполните scripts/stop.sh"; exit 1
   fi
@@ -68,10 +74,21 @@ start() {  # start <имя> <команда...>: запуск в фоне, ло�
   PIDS+=($!)
 }
 
-start smev uv run uvicorn emulators.app.smev:app --port $SMEV_PORT
-start bki uv run uvicorn emulators.app.bki:app --port $BKI_PORT
+start smev bin/smev
+start bki bin/bki
+start tokenizer bin/tokenizer
 start backend uv run uvicorn backend.app.main:app --port $BACKEND_PORT
 start frontend npm --prefix frontend run dev -- --port $FRONT_PORT --strictPort
+
+# Go-сервисы стартуют за доли секунды; если не поднялись — почти всегда секрет или занятый порт (см. logs/<имя>.log)
+for pair in smev:$SMEV_PORT bki:$BKI_PORT tokenizer:$TOKENIZER_PORT; do
+  name=${pair%%:*}; port=${pair##*:}
+  for _ in $(seq 1 20); do
+    curl -sf "http://127.0.0.1:$port/health" >/dev/null 2>&1 && continue 2
+    sleep 0.5
+  done
+  echo "Сервис $name не поднялся. Смотрите logs/$name.log"; exit 1
+done
 
 echo -n "Жду backend"
 for _ in $(seq 1 90); do
@@ -87,8 +104,9 @@ cat <<TABLE
 
 Приложение (UI)  http://localhost:$FRONT_PORT
 API backend      http://localhost:$BACKEND_PORT/api/health
-Эмулятор СМЭВ    http://localhost:$SMEV_PORT/health
-Эмулятор БКИ     http://localhost:$BKI_PORT/health
+Эмулятор СМЭВ    http://localhost:$SMEV_PORT/health   (Go)
+Эмулятор БКИ     http://localhost:$BKI_PORT/health   (Go)
+Токенизатор      http://localhost:$TOKENIZER_PORT/health   (Go, OPRF; ключ secrets/oprf.key)
 
 Данные для входа: secrets/credentials.local.md (создаётся при первом запуске, в git не попадает)
 Магические паспорта: 0000 000001 … 000005 (см. README)
