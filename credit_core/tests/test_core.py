@@ -228,3 +228,8 @@ def test_emulator_formulas_follow_spec():
                     (450, False), (500, False), (550, False), (400, True)}
     statuses = [emulation.smev_status(f"cli_{i:04d}") for i in range(1000)]
     assert 0.05 < statuses.count("MISMATCH") / 1000 < 0.15
+
+
+def test_validation_rejects_garbage_types_and_huge_income():
+    assert validate_fields(base(passport_hash=12345))[0].code == "INVALID_PASSPORT_HASH"
+    assert validate_fields(base(income=1e12))[0].code == "INVALID_INCOME"

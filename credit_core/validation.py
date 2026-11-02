@@ -41,7 +41,7 @@ def validate_fields(app: Application) -> list[FieldError]:
 
     if "age" not in present and (not isinstance(app.age, int) or isinstance(app.age, bool)):
         errors.append(_err("age", "INVALID_AGE"))
-    if "income" not in present and not (_is_number(app.income) and app.income > 0):
+    if "income" not in present and not (_is_number(app.income) and 0 < app.income <= rules.MAX_INCOME):
         errors.append(_err("income", "INVALID_INCOME"))
     if "employment" not in present and app.employment not in rules.EMPLOYMENTS:
         errors.append(_err("employment", "INVALID_EMPLOYMENT"))
@@ -53,7 +53,7 @@ def validate_fields(app: Application) -> list[FieldError]:
     lo, hi = rules.TERM_RANGE
     if "term" not in present and not (isinstance(app.term, int) and not isinstance(app.term, bool) and lo <= app.term <= hi):
         errors.append(_err("term", "INVALID_TERM"))
-    if app.passport_hash is not None and not PASSPORT_HASH_RE.match(app.passport_hash):
+    if app.passport_hash is not None and not (isinstance(app.passport_hash, str) and PASSPORT_HASH_RE.match(app.passport_hash)):
         errors.append(_err("passport_hash", "INVALID_PASSPORT_HASH"))
     if app.product_id not in PRODUCTS:
         errors.append(_err("product_id", "UNKNOWN_PRODUCT"))

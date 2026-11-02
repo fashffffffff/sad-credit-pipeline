@@ -21,6 +21,7 @@ EMPLOYMENTS = ("employed", "self-employed", "student", "retired", "unemployed")
 FAMILIES = ("single", "married", "children")
 AMOUNT_RANGE = (10_000, 5_000_000)   # из схемы Application организаторов
 TERM_RANGE = (3, 60)
+MAX_INCOME = 100_000_000      # защита от мусора: больше 100 млн ₽ в месяц — явная ошибка ввода
 DEFAULT_PRODUCT = "prod_standard"
 
 # --- Веса признаков (сумма максимумов = 100) ---
