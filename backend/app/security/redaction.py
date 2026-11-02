@@ -1,31 +1,29 @@
-"""Что оператору НЕ показываем про антифрод.
+"""Что клиенту НЕЛЬЗЯ показывать (раздел 6.1 и 7 контракта).
 
-Оператор — сотрудник на передовой и потенциальный «свой» мошенник: если он видит оценку, схему и конкретные признаки
-(«8 паспортов с одного устройства»), то может подбирать заявки так, чтобы обойти порог. Поэтому оператор получает только
-факт «заявка передана на дополнительную проверку»; подробности — риск-менеджер, аудитор и админ.
+Клиент никогда не видит: антифрод (fraud), подсказку модели (ml_hint), журнал внешних вызовов (external),
+строку правила 11 в трассировке, служебные тексты для сотрудников. Иначе мошенник мог бы подбирать заявки так,
+чтобы обойти антифрод, а честный клиент узнавал бы, что его «подозревают».
 """
 
-GENERIC_FRAUD_TEXT = "Заявка передана на дополнительную проверку"
+FRAUD_RULE_NUMBER = 11
+# клиенту причину FRAUD_SUSPECT подменяем на LOW_SCORE: текст для клиента у них одинаковый, а сам код выдавал бы подозрение
+CLIENT_REASON_ALIAS = {"FRAUD_SUSPECT": "LOW_SCORE"}
+HIDDEN_STAGES_FOR_CLIENT = ("antifraud",)
 
 
-def redact_fraud(fraud: dict | None) -> dict | None:
-    """Поле fraud заявки в урезанном виде (та же форма, чтобы фронт не ломался; redacted=True скрывает цифры)."""
-    if fraud is None:
-        return None
-    return {"fraud_score": 0, "pattern": None, "pattern_ru": None, "similarity": 0, "anomaly": 0,
-            "channel": fraud.get("channel"), "flagged": bool(fraud.get("flagged")), "inherited_from_cluster": False,
-            "explanation": [], "component_size": 0, "cluster_id": None, "redacted": True,
-            "text": GENERIC_FRAUD_TEXT if fraud.get("flagged") else None}
+def redact_reason(reason: str) -> str:
+    return CLIENT_REASON_ALIAS.get(reason, reason)
 
 
-def redact_reasons(reasons: list[dict]) -> list[dict]:
-    return [{**r, "text": GENERIC_FRAUD_TEXT} if r.get("code") == "FRAUD_SUSPECT" else r for r in reasons]
+def redact_trace(trace: list[dict]) -> list[dict]:
+    return [t for t in trace if t.get("n") != FRAUD_RULE_NUMBER]
 
 
-def redact_stage_detail(stage: str, status: str, detail: str, reasons: list[dict] | None = None) -> str:
-    """Текст этапа для оператора: у antifraud без оценки и размера группы, у decision — причины без деталей антифрода."""
-    if stage == "antifraud":
-        return {"warn": GENERIC_FRAUD_TEXT, "ok": "Проверка выполнена"}.get(status, detail)
-    if stage == "decision" and reasons is not None:
-        return "; ".join(r["text"] for r in redact_reasons(reasons))
-    return detail
+def redact_offers(offers: list[dict]) -> list[dict]:
+    return offers  # предложения — для клиента, скрывать нечего; функция оставлена для единообразия вызовов
+
+
+def visible_stages(stages: list[dict], role: str) -> list[dict]:
+    if role != "client":
+        return stages
+    return [s for s in stages if s["stage"] not in HIDDEN_STAGES_FOR_CLIENT]

@@ -1,4 +1,4 @@
-"""Граф связей заявок. Узел — заявка, ребро — общий отпечаток (устройство, телефон, паспорт, работодатель).
+"""Граф связей заявок. Узел — заявка, ребро — общий отпечаток (устройство, телефон аккаунта, passport_hash).
 
 Граф живёт в памяти и обновляется по одной заявке (инкрементально). Компоненты связности держим через union-find.
 Чтобы группа из N заявок с одним устройством не давала N² рёбер, новая заявка связывается не более чем
@@ -8,7 +8,7 @@
 from dataclasses import dataclass, field
 
 # насколько «свежей» должна быть общая связь, чтобы считаться ребром (секунды)
-WINDOWS = {"device": 6 * 3600, "phone": 7 * 86400, "passport": 30 * 86400, "employer": 3600}
+WINDOWS = {"device": 6 * 3600, "phone": 7 * 86400, "passport": 30 * 86400}
 MAX_LINKS = 3
 KINDS = tuple(WINDOWS)
 
@@ -23,7 +23,7 @@ class Node:
     term: int = 0
     n_loans: int = 0
     known_months: int = 0
-    channel: str = "office"  # office | online
+    channel: str = "app"  # app (прислан id устройства) | nodevice
     arrived: float = 0.0  # реальное время появления в графе (для окна ?minutes=...; ts у симулятора виртуальное)
     score: float | None = None
     pattern: str | None = None

@@ -26,26 +26,29 @@ class EventBus:
         self._subscribers.pop(queue, None)
 
     @staticmethod
-    def _visible(event_type: str, owner: str | None, username: str | None, role: str | None) -> bool:
-        """Кто что видит: события безопасности — только аудитор и админ; события заявки — оператор только по своим."""
+    def _visible(event_type: str, owner: str | None, username: str | None, role: str | None,
+                 client_visible: bool) -> bool:
+        """Кто что видит. Клиент — только события своих заявок и только «клиентские» (без антифрода);
+        граф и антифрод — андеррайтер, аудитор, админ; события безопасности — аудитор и админ; хаос — аудитор и админ."""
         if role is None:
             return True
-        if event_type == "graph":  # граф связей — аналитика для риск-менеджера, аудитора и админа
-            return role in ("risk_manager", "auditor", "admin")
-        if event_type == "security":  # там логины и пути запросов, оператору они ни к чему
+        if role == "client":
+            return client_visible and event_type in ("stage", "decision") and owner == username
+        if event_type in ("graph", "fraud"):
+            return role in ("underwriter", "auditor", "admin")
+        if event_type in ("security", "chaos"):
             return role in ("auditor", "admin")
-        if owner is not None and role == "operator":
-            return owner == username
         return True
 
-    def publish(self, event_type: str, data: dict, owner: str | None = None, operator_data: dict | None = None) -> None:
-        """owner — логин автора заявки (для событий конвейера): оператору уходят только события его заявок.
-        operator_data — урезанная версия события для роли operator (без деталей антифрода)."""
+    def publish(self, event_type: str, data: dict, owner: str | None = None, client_data: dict | None = None,
+                client_visible: bool = True) -> None:
+        """owner — client_id автора заявки (для событий конвейера): клиенту уходят только события его заявок.
+        client_data — урезанная версия события для клиента; client_visible=False — клиенту не показывать вовсе."""
         for queue, (username, role) in list(self._subscribers.items()):
-            if not self._visible(event_type, owner, username, role):
+            if not self._visible(event_type, owner, username, role, client_visible):
                 continue
             try:
-                queue.put_nowait((event_type, operator_data if role == "operator" and operator_data is not None else data))
+                queue.put_nowait((event_type, client_data if role == "client" and client_data is not None else data))
             except asyncio.QueueFull:
                 pass  # медленный клиент не должен тормозить конвейер — для него событие пропадёт
 

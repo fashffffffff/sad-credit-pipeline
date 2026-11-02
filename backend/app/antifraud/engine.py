@@ -2,7 +2,7 @@
 
 Решение антифрода — только ПРЕДУПРЕЖДЕНИЕ (заявка уходит на ручную проверку), а не отказ:
 честных людей не наказываем, окончательно решает человек.
-В графе и в таблице fraud_nodes — только HMAC-отпечатки, никаких открытых телефонов, ИНН и паспортов.
+В графе и в таблице fraud_nodes — только HMAC-отпечатки, никаких открытых телефонов и паспортов.
 """
 
 import math
@@ -14,10 +14,9 @@ from backend.app.antifraud.fingerprints import fingerprint
 from backend.app.antifraud.graph import Edge, FraudGraph, Node
 from backend.app.antifraud.model import FraudModel, reference_model
 from backend.app.db import Database
-from common.passport import is_magic
 
 STRONG_KINDS = ("device", "phone", "passport")
-MAX_VIEW_NODES = 1500  # самые свежие узлы, которые отдаёт /api/antifraud/graph
+MAX_VIEW_NODES = 1500  # самые свежие узлы, которые отдаёт /api/v1/antifraud/graph
 INHERIT_MIN_SCORE = 0.35  # заявка рядом с уже помеченной группой: хватает половины порога
 
 
@@ -37,9 +36,8 @@ FACT_TEMPLATES = {
     "n_dev_passports": lambda v: f"{plural(int(v) + 1, 'паспорт', 'паспорта', 'паспортов')} с одного устройства",
     "n_dev_1h": lambda v: f"{plural(int(v) + 1, 'заявка', 'заявки', 'заявок')} с этого устройства за час",
     "n_phone_passports": lambda v: f"один телефон указан у {plural(int(v) + 1, 'паспорта', 'паспортов', 'паспортов')}",
-    "n_employer_1h": lambda v: f"{plural(int(v) + 1, 'заявка', 'заявки', 'заявок')} одного работодателя за час",
+    "n_phone_apps": lambda v: f"{plural(int(v) + 1, 'заявка', 'заявки', 'заявок')} с одного телефона за неделю",
     "log_gap_device": lambda v: f"пауза до соседней заявки с устройства {_minutes(math.expm1(v))}",
-    "log_gap_employer": lambda v: f"пауза до соседней заявки работодателя {_minutes(math.expm1(v))}",
     "log_comp_size": lambda v: f"связанная группа из {plural(round(math.expm1(v)), 'заявки', 'заявок', 'заявок')}",
     "log_comp_growth": lambda v: f"группа выросла на {plural(round(math.expm1(v)), 'заявку', 'заявки', 'заявок')} за час",
     "log_comp_passports": lambda v: f"в группе {round(math.expm1(v))} разных паспортов",
@@ -62,27 +60,29 @@ class AntifraudEngine:
         """После перезапуска восстанавливаем граф из сохранённых узлов (рёбра пересчитываются)."""
         rows = self.db.query_all("SELECT * FROM fraud_nodes ORDER BY ts DESC LIMIT 5000")
         for r in reversed(rows):
-            fps = {"device": r["device"], "phone": r["phone"], "employer": r["employer"], "passport": r["passport"]}
+            fps = {"device": r["device"], "phone": r["phone"], "passport": r["passport"]}
             node = Node(r["app_id"], r["ts"], {k: v for k, v in fps.items() if v},
                         r["amount"], r["income"], r["term"], r["n_loans"], r["known_months"],
-                        channel=r["channel"] or "office", score=r["score"], pattern=r["pattern"],
+                        channel=r["channel"] or "nodevice", score=r["score"], pattern=r["pattern"],
                         flagged=bool(r["flagged"]))
             node.arrived = min(node.ts, time.time())  # реальное время появления после перезапуска неизвестно
             self.graph.add(node)
             self.last_ts = max(self.last_ts, node.ts)
 
-    def assess(self, app_id: str, data, loans: list[dict], ts: float | None = None) -> tuple[dict, list[Edge]]:
+    def assess(self, app_id: str, passport_hash: str, phone_hash: str | None, device_hash: str | None,
+               amount: float, income: float, term: int, loans: list[dict], ts: float | None = None) -> tuple[dict, list[Edge]]:
+        """device_hash — уже отпечаток (его считает сервис при создании заявки), phone_hash — HMAC-отпечаток из client_auth."""
         ts = ts if ts is not None else time.time()
         fp = lambda kind, value: fingerprint(self.pepper, kind, value)  # noqa: E731
-        fps = {"phone": fp("phone", data.phone), "employer": fp("inn", data.employer_inn),
-               "passport": fp("passport", app_id if is_magic(data.passport) else data.passport)}
-        # «устройство» — только устройство КЛИЕНТА. Без client_device_id (заявка из офиса) ребра устройства нет вообще:
-        # браузер и IP оператора склеили бы всех его честных клиентов в одну «фабрику»
-        if data.client_device_id:
-            fps["device"] = fp("device", data.client_device_id)
-        node = Node(app_id, ts, fps, amount=data.loan_amount, income=data.monthly_income, term=data.loan_term_months,
+        fps = {"passport": fp("passport", passport_hash)}
+        if phone_hash:
+            fps["phone"] = fp("phone", phone_hash)
+        # без id устройства (приложение его не прислало) ребра устройства нет вообще: «пустое» устройство склеило бы всех подряд
+        if device_hash:
+            fps["device"] = device_hash
+        node = Node(app_id, ts, fps, amount=int(amount), income=int(income), term=term,
                     n_loans=len(loans), known_months=known_months_of(loans),
-                    channel="online" if data.client_device_id else "office")
+                    channel="app" if device_hash else "nodevice")
         node.arrived = time.time()
         new_edges = self.graph.add(node)
         vec = build_vector(self.graph, node)
@@ -123,9 +123,9 @@ class AntifraudEngine:
     def _save(self, node: Node) -> None:
         f = node.fps
         self.db.execute(
-            "INSERT OR REPLACE INTO fraud_nodes (app_id, ts, device, phone, employer, passport, amount, income, term,"
-            " n_loans, known_months, score, pattern, flagged, channel) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (node.id, node.ts, f.get("device"), f["phone"], f["employer"], f["passport"], node.amount, node.income,
+            "INSERT OR REPLACE INTO fraud_nodes (app_id, ts, device, phone, passport, amount, income, term,"
+            " n_loans, known_months, score, pattern, flagged, channel) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (node.id, node.ts, f.get("device"), f.get("phone"), f["passport"], node.amount, node.income,
              node.term, node.n_loans, node.known_months, node.score, node.pattern, int(node.flagged), node.channel))
 
     # --- представление для API ------------------------------------------
@@ -138,7 +138,7 @@ class AntifraudEngine:
         recent.sort(key=lambda i: self.graph.nodes[i].ts, reverse=True)
         ids = set(recent[:MAX_VIEW_NODES])
         status = {r["id"]: r["status"] for r in self.db.query_all(
-            f"SELECT id, status FROM applications WHERE id IN ({','.join('?' * len(ids))})", tuple(ids))} if ids else {}
+            f"SELECT app_id AS id, status FROM applications WHERE app_id IN ({','.join('?' * len(ids))})", tuple(ids))} if ids else {}
         nodes = [{"id": i, "status": status.get(i, "processing"), "fraud_score": round(self.graph.nodes[i].score or 0, 3),
                   "ts": self.graph.nodes[i].ts} for i in sorted(ids, key=lambda i: self.graph.nodes[i].ts)]
         edges = [{"a": e.a, "b": e.b, "kind": e.kind} for e in self.graph.edges if e.a in ids and e.b in ids]

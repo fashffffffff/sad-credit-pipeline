@@ -2,7 +2,7 @@
 
 Как это работает:
   * при старте читаем файл учёток (env CREDENTIALS_FILE, по умолчанию secrets/credentials.local.json);
-  * если файла нет — генерируем 4 учётки (по одной на роль), пишем файл с правами 600 и рядом читаемую таблицу .md;
+  * если файла нет — генерируем 3 учётки (по одной на роль), пишем файл с правами 600 и рядом читаемую таблицу .md;
   * в БД попадают только bcrypt-хэши; в лог пишем путь к файлу, но не пароли.
 Самостоятельной регистрации нет: аккаунты сотрудникам выдаёт администратор (как в банке).
 """
@@ -18,15 +18,15 @@ from backend.app.security.passwords import check_password
 log = logging.getLogger("credentials")
 
 # роль -> префикс логина. Логин = префикс + случайный хвост, поэтому угадать его по роли нельзя
-ROLE_PREFIXES = [("operator", "op"), ("risk_manager", "risk"), ("auditor", "audit"), ("admin", "admin")]
-ROLE_TITLES = {"operator": "Оператор", "risk_manager": "Риск-менеджер", "auditor": "Аудитор", "admin": "Администратор"}
+ROLE_PREFIXES = [("underwriter", "uw"), ("auditor", "audit"), ("admin", "admin")]
+ROLE_TITLES = {"underwriter": "Андеррайтер", "auditor": "Аудитор", "admin": "Администратор (пульт стенда)"}
 
 # Старые публичные демо-пароли «логин+123» (были в репозитории). Они больше нигде не должны работать.
-LEGACY_USERS = ["operator", "risk", "auditor", "admin"]
+LEGACY_USERS = ["operator", "risk", "underwriter", "auditor", "admin"]
 
 
 def generate_credentials() -> list[dict]:
-    """4 учётки: логин вида op.7f3a9c, пароль 24 символа из secrets.token_urlsafe."""
+    """3 учётки: логин вида op.7f3a9c, пароль 24 символа из secrets.token_urlsafe."""
     return [{"username": f"{prefix}.{secrets.token_hex(3)}", "role": role, "password": secrets.token_urlsafe(18)}
             for role, prefix in ROLE_PREFIXES]
 
