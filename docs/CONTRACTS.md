@@ -1,156 +1,223 @@
-# Архитектура и контракты (единый источник правды)
+# Архитектура и контракты — версия 6 (единый источник правды)
 
-Все части проекта (ML, эмуляторы, backend, frontend) делаются параллельно и стыкуются **только через этот документ**.
-Менять контракт — только через тимлида.
+Все части проекта стыкуются **только через этот документ**. Менять контракт — только через тимлида.
+
+**Что изменилось в v6 и почему.** Нашлись правила кейса 2 (папка организаторов `case_2_credit/`). Прототип v5 был сделан «для сотрудников банка»
+с ML в основе решения. По правилам кейса нужно другое:
+- клиент сам подаёт заявку через приложение банка;
+- решение принимают **правила кейса**: балл 0–100 по 5 признакам, DTI, лимиты, коды причин из каталога;
+- обязательны консольный прототип `applications.csv → decisions.csv`, эмуляторы БКИ и СМЭВ по спецификации организаторов, RBAC «клиент / сервис / андеррайтер / аудитор».
+
+ML-модель остаётся **подсказкой андеррайтеру** и на решение не влияет.
+
+Материалы организаторов (копия для работы): `data/case2/` — `applications.csv`, `products.csv`.
+Файл `products.csv` организаторов на самом деле Excel-книга (xlsx) с расширением `.csv`; мы сконвертировали её в настоящий CSV, в README данных это отмечено.
 
 ## 1. Общая схема
 
 ```
- Браузер (Svelte + ECharts)
-    │  REST /api/*  +  SSE /api/events/stream (живые события конвейера)
-    ▼
- Backend (FastAPI, порт 8000)
-    ├─ security: JWT-вход, RBAC (4 роли), маскирование, хэш PII
-    ├─ pipeline: validation → smev → bki → scoring → decision
-    │     ├─ HTTP + HMAC ──► Эмулятор СМЭВ (порт 8101)
-    │     ├─ HTTP + HMAC ──► Эмулятор БКИ  (порт 8102)
-    │     └─ ml.credit_model (CatBoost + SHAP, в процессе)
-    ├─ SQLite: applications, stages, users, idempotency, audit_log
-    └─ audit: журнал с хэш-цепочкой (подделка записи обнаруживается)
+ Браузер клиента (Svelte, мобильная вёрстка)        Браузер сотрудника (бэк-офис)
+   │  паспорт → OPRF-маскировка прямо в браузере      │
+   │  REST /api/v1/*  +  SSE                          │
+   ▼                                                  ▼
+ Backend (Python, FastAPI, порт 8000)
+   ├─ auth: клиент — Telegram-бот / звонок / Яндекс ID / VK ID (+ демо-код); сотрудники — логин и пароль
+   ├─ pipeline: validation → local_rules → smev ∥ bki → antifraud → scoring → decision
+   │     ├─ HTTP + HMAC ──► СМЭВ        (Go, порт 8101)
+   │     ├─ HTTP + HMAC ──► БКИ         (Go, порт 8102)  /bki/score + /bki/report (история для ML)
+   │     └─ credit_core (чистый Python: правила, баллы, DTI, продукты, встречные предложения)
+   ├─ ml.credit_model (CatBoost + SHAP) — только подсказка андеррайтеру
+   ├─ passport-proxy ──HTTP + HMAC──► Токенизатор паспорта (Go, порт 8103, OPRF RFC 9497)
+   ├─ SQLite: clients, applications, decisions, scoring_results, external_requests, audit_log, …
+   ├─ logs/external.log — каждый вызов внешнего сервиса (JSON Lines)
+   └─ audit: журнал с хэш-цепочкой (append-only, подделка обнаруживается)
+
+ prototype/04_прототип.py — консольный прототип кейса: тот же credit_core, CSV → decisions.csv
 ```
 
-Python 3.12, одно окружение `uv` в корне (`pyproject.toml`). Все команды запускаются **из корня репо**:
+**Языки и почему.** Python — backend, правила, ML (в банках ML и риск-аналитика почти везде на Python).
+Go — то, что в реальном банке — отдельные сервисы с жёсткими требованиями к надёжности и изоляции:
+внешние системы (эмуляторы БКИ и СМЭВ) и токенизатор паспорта — единственный сервис, у которого есть секретный ключ OPRF.
 
-- `uv run uvicorn backend.app.main:app --port 8000`
-- `uv run uvicorn emulators.app.smev:app --port 8101`
-- `uv run uvicorn emulators.app.bki:app --port 8102`
-- `uv run python -m ml.train`
-- `cd frontend && npm run dev` (порт 5173, прокси `/api` → 8000)
+Команды (из корня репозитория):
+- `uv sync`; `uv run uvicorn backend.app.main:app --port 8000`
+- `cd services && go build -o ../bin/ ./cmd/...` → `bin/smev`, `bin/bki`, `bin/tokenizer`
+- `uv run python prototype/04_прототип.py data/case2/applications.csv --out decisions.csv`
+- `cd frontend && npm run dev` (5173, прокси `/api` → 8000)
+- всё сразу: `bash scripts/run.sh`
 
-Зависимости Python уже прописаны в `pyproject.toml`. Нужна новая — согласовать с тимлидом, а не дописывать самому.
-Секреты — переменные окружения, список в README, раздел «Настройки» (у каждой есть значение по умолчанию для демо).
+Зависимости Python и npm добавляет только тимлид.
 
-## 2. Анкета заявки (вход `POST /api/applications`) — версия 5
+## 2. Ядро решения: пакет `credit_core/` (только стандартная библиотека Python)
 
-```json
-{
-  "full_name": "Иванов Иван Иванович",
-  "birth_date": "1995-04-12",
-  "passport": "4510 123456",
-  "passport_issue_date": "2015-05-20",
-  "passport_division_code": "770-001",
-  "phone": "+79991234567",
-  "monthly_income": 120000,
-  "employer_inn": "7707083893",
-  "employment_months": 36,
-  "dependents": 1,
-  "loan_amount": 500000,
-  "loan_term_months": 24,
-  "purpose": "consumer",
-  "client_device_id": "ios-3f9a2c71"
-}
+Одна реализация правил для всех: консольный прототип, backend, тесты, пакетный прогон в интерфейсе. **Нигде больше правила не дублируются.**
+
+### 2.1 Входные данные заявки (поля кейса)
+
+| Поле | Тип | Ограничение | Код ошибки |
+|-|-|-|-|
+| app_id | string | `app_NNNN`, выдаёт сервис | — |
+| client_id | string | `cli_NNNN`, выдаёт сервис при первом входе клиента | — |
+| passport_hash | string | `^[a-f0-9]{16}$` (см. раздел 5) | `INVALID_PASSPORT_HASH` (422) |
+| age | int | 18–70 | `AGE_OUT_OF_RANGE` |
+| income | number | > 0, месячный доход, ₽ | `MISSING_INCOME` (пусто) |
+| employment | enum | `employed` `self-employed` `student` `retired` `unemployed` | `INVALID_EMPLOYMENT` |
+| family | enum | `single` `married` `children` | `INVALID_FAMILY` |
+| amount | number | 10 000 – 5 000 000 ₽ | `INVALID_AMOUNT` |
+| term | int | 3–60 мес. | `INVALID_TERM` |
+| product_id | string | из `products.csv`; в пакетном режиме по умолчанию `prod_standard` | `PRODUCT_MISMATCH` (422) |
+
+Пол, национальность, ФИО, адрес **не собираем и не используем** — запрет дискриминации (U-1) и минимизация ПДн.
+
+### 2.2 Баллы (максимум 100)
+
+| Признак | Условие → баллы |
+|-|-|
+| Доход | ≥150k → 30; 80–150k → 20; 40–80k → 10; <40k → 0 (дано) |
+| Занятость | employed 25; self-employed 20; retired 10; student 5; unemployed 0 (дано) |
+| Возраст | 25–50 → 20; 18–24 или 51–60 → 10; 61–70 → 5 (дано) |
+| Семья | married 15; children 15; single 10 (наш выбор) |
+| БКИ | ≥700 → 10; 600–699 → 5; 500–599 → 0; <500 или просрочка → −20 (наш выбор) |
+
+`score = max(0, сумма)`. Если сумма < 0 — в трассировке `score_capped_to_zero=true`.
+
+### 2.3 Пороги и формулы
+
+```
+RULES_VERSION = "2026.11-1"
+MIN_SCORE = 60            # ниже — ручная проверка (не отказ, см. правило 10)
+MAX_DTI = 0.5
+AMOUNT_MULTIPLIER = 10    # amount ≤ 10 × income
+MIN_INCOME = 30000
+MIN_AGE, MAX_AGE = 18, 70
+BKI_REFUSE_BELOW = 550    # bki_score < 550 или delinquency → отказ
+
+monthly_rate = product.rate / 12          # prod_standard: 0.18
+payment = amount × r / (1 − (1 + r)^(−term))
+dti = payment / income                    # хранится и сравнивается с 2 знаками (как в data_dictionary и разметке CSV)
 ```
 
-Главный принцип: **настоящие корректные данные проходят всегда, выдуманные и опечатки не проходят**. Случайных отказов в проверках нет.
-Лишние поля в запросе → 422 (`extra="forbid"`). Строки обрезаются по пробелам, длина ограничена.
+### 2.4 Правила — строго по порядку, первое сработавшее даёт итог
 
-Правила проверки формы (Data Dictionary), ошибка → 422:
+| № | Условие | decision | reason |
+|-|-|-|-|
+| 1 | age < 18 или > 70 | REFUSED | AGE_OUT_OF_RANGE |
+| 2 | employment = unemployed | REFUSED | INVALID_EMPLOYMENT |
+| 3 | income пуст | NEED_MORE_DATA | MISSING_INCOME |
+| 3a | пусто другое обязательное поле | NEED_MORE_DATA | MISSING_<FIELD> (MISSING_AGE и т. д.) |
+| 4 | income < 30 000 | REFUSED | LOW_INCOME |
+| 5 | dti > 0.5 | REFUSED | HIGH_DTI |
+| 6 | СМЭВ или БКИ = TIMEOUT/ERROR | NEED_MORE_DATA | EXTERNAL_TIMEOUT |
+| 7 | bki_score < 550 или delinquency | REFUSED | BKI_DELINQUENCY |
+| 8 | amount > 10 × income | REFUSED | AMOUNT_LIMIT |
+| 9 | smev = MISMATCH | REFUSED | SMEV_MISMATCH |
+| 10 | score < 60 | MANUAL_REVIEW | LOW_SCORE |
+| 11 | антифрод пометил заявку (только живой конвейер) | MANUAL_REVIEW | FRAUD_SUSPECT |
+| 12 | всё прошло | APPROVED | "" |
 
-| Поле | Правило |
-|---|---|
-| full_name | 2–3 части (отчество необязательно), каждая с заглавной буквы, кириллица и дефис, 2–40 символов на часть, без трёх одинаковых букв подряд |
-| birth_date | не в будущем; возраст на дату заявки 18–75 лет; **возраст на дату последнего платежа ≤ 75** |
-| passport | `NNNN NNNNNN`. Серия: первые 2 цифры — код региона по ОКАТО (должен существовать), последние 2 — год изготовления бланка (1997…текущий). Номер не `000000` |
-| passport_issue_date | не в будущем; не раньше 14-летия; не раньше 01.10.1997 (начало выдачи паспортов РФ); год бланка из серии ≤ года выдачи и не раньше него больше чем на 5 лет |
-| passport_division_code | `NNN-NNN`; первые 2 цифры — код субъекта, **соответствует региону из серии** (таблица соответствия ОКАТО ↔ код субъекта, например Москва 45 ↔ 77, СПб 40 ↔ 78, МО 46 ↔ 50). Если соответствие для региона неизвестно — пропускаем с предупреждением в лог, а не отказываем |
-| phone | `+7 9XX XXX-XX-XX` — только мобильные номера РФ |
-| monthly_income | 10 000 – 10 000 000 ₽ |
-| employer_inn | 10 цифр, корректная контрольная сумма, не все нули, код региона (первые 2 цифры) 01–99. Проверка существования — см. ниже |
-| employment_months | 0–600 и **не больше (возраст − 14 лет) × 12** |
-| dependents | 0–10 |
-| loan_amount | 30 000 – 5 000 000 ₽ и **не больше 60 месячных доходов** |
-| loan_term_months | 6–84 |
-| purpose | `consumer` \| `auto` \| `refinance` \| `education` |
-| client_device_id | необязательное: идентификатор устройства **клиента** (его присылает приложение клиента в онлайн-канале), 8–64 символа `A-Za-z0-9._-`. Нет поля — заявка «из офиса» (канал `office`) |
+**Почему так (обоснование для `02_правила.md`):**
+- Порог БКИ 550, а не 500: так сказано в `data_dictionary` организаторов («< 550 = отказ»), и только с ним правила совпадают с разметкой `applications.csv` (проверено расчётом: 96 из 100 при 550 против 86 при 500).
+- `LOW_SCORE` → MANUAL_REVIEW, а не отказ. В разметке CSV нет ни одного отказа по баллу; 5 заявок с баллом 45–55 размечены APPROVED. Порог 60 обязателен по условию — мы не одобряем автоматически, но и не отказываем: решает андеррайтер (с ML-подсказкой).
+- `EXTERNAL_TIMEOUT` стоит перед правилами, которым нужны данные БКИ и СМЭВ: без них честно решить нельзя. Таймаут — никогда не отказ.
+- Правила 1–5 проверяются **до** запросов во внешние системы: если они сработали, БКИ и СМЭВ не вызываются (статус `NOT_CALLED`) — экономия и меньше передачи ПДн.
 
-Проверки паспорта лежат в одном модуле `common/passport.py`, им пользуются и backend, и эмулятор СМЭВ.
+**Расхождения с разметкой CSV (объясняем в `07_decision_mechanism.md`):** app_0005 (CSV HIGH_DTI, по формуле DTI 0,39 → AMOUNT_LIMIT), app_0007 (CSV APPROVED при SMEV=MISMATCH → у нас отказ), app_0009 (CSV AMOUNT_LIMIT, но 700 000 ≤ 10 × 80 000), app_0012 (CSV HIGH_DTI, но DTI 0,24) и 5 заявок с баллом < 60 (у нас MANUAL_REVIEW).
 
-**Проверка существования работодателя** — переключается переменной `EMPLOYER_CHECK`:
-- `offline` (по умолчанию): только контрольная сумма;
-- `fns`: запрос в открытый сервис ФНС (ЕГРЮЛ). При сетевой ошибке или таймауте 3 c откатываемся на `offline` и пишем warning; заявка из-за этого не падает.
+**Пакетный режим (CSV):** данные БКИ и СМЭВ берутся из колонок `bki_score`, `smev_status` (это уже полученные ответы; формула эмулятора с ними не совпадает).
+`delinquency` в CSV нет: считаем `true`, если `bki_score < 500` (как в эталоне организаторов). Если колонок нет — `--emulate` считает их формулами эмуляторов (раздел 3).
+Ошибка формата поля в пакетном режиме → NEED_MORE_DATA с кодом поля из 2.1 (в API та же ошибка — HTTP 422).
 
-Код проверки — за интерфейсом `EmployerChecker`, чтобы источник можно было заменить одной строкой.
+### 2.5 Продукты (`credit_core/products.py`, данные из `data/case2/products.csv`)
 
-**Одна заявка на паспорт:** если по этому `passport_hash` есть заявка в `processing` или `manual_review`, либо отказ меньше 30 дней назад, новая заявка → 409
-`{"error": "duplicate_application", "detail": "…", "existing_id": "app_…"}`. Повтор с тем же `Idempotency-Key` по-прежнему возвращает ту же заявку.
-Для демо есть env `DUPLICATE_CHECK=off`. Магические паспорта и `/api/simulate` под это правило не попадают.
+| product_id | Название | Сумма | Срок | Ставка | Возраст | Мин. доход |
+|-|-|-|-|-|-|-|
+| prod_standard | Потребительский стандарт | 10k–1M | 3–60 | 18% | 18–70 | 30 000 |
+| prod_premium | Потребительский премиум | 100k–5M | 12–60 | 15% | 25–65 | 150 000 |
+| prod_student | Студенческий | 10k–300k | 3–36 | 12% | 18–25 | 10 000 |
+| prod_pension | Пенсионный | 10k–500k | 3–24 | 16% | 55–70 | 20 000 |
+| prod_express | Экспресс-кредит | 10k–300k | 3–24 | 22% | 18–70 | 40 000 |
 
-Ошибка валидации → HTTP 422 с телом `{"error": "validation_error", "fields": {"<поле>": "<сообщение по-русски>"}}`.
-Ставка для расчёта платежа — фиксированная 18% годовых (аннуитет).
+Параметры продукта проверяются **при подаче** (API → 422 `PRODUCT_MISMATCH` со списком подходящих продуктов). Правила 1–12 остаются общими.
+`eligible_products(age, income, amount, term)` — для автоподбора в интерфейсе.
 
-## 3. Эмуляторы внешних систем
+### 2.6 Встречные предложения (`credit_core/offers.py`)
 
-Оба — отдельные FastAPI-приложения в `emulators/app/` (`smev.py`, `bki.py`), общий код в `emulators/app/common.py`.
+Только если итог — REFUSED по `HIGH_DTI` или `AMOUNT_LIMIT` (это можно исправить параметрами). Перебираем продукты, подходящие клиенту,
+сроки в их границах и сумму (шаг 10 000 ₽) и прогоняем каждый вариант **через тот же движок с теми же ответами БКИ и СМЭВ** — новых запросов нет.
+Возвращаем до 3 вариантов с итогом APPROVED: максимальная сумма на исходный срок; исходная сумма на минимальный подходящий срок; лучший другой продукт.
+`{product_id, amount, term, rate, monthly_payment, dti, score}`.
 
-**Подпись.** И запрос банка, и ответ эмулятора подписываются `common/signing.py` (заголовки `X-Signature`, `X-Timestamp`).
-Секреты: `SMEV_HMAC_SECRET`, `BKI_HMAC_SECRET`. Запрос с неверной подписью → 401.
+### 2.7 Интерфейс пакета
 
-**Детерминизм.** Профиль человека генерируется из `sha256(passport)` как seed — один и тот же паспорт всегда даёт один и тот же ответ.
+```python
+from credit_core import (Application, BkiResult, SmevStatus, evaluate, score_breakdown,
+                         compute_dti, monthly_payment, PRODUCTS, eligible_products,
+                         counter_offers, REASONS, validate_fields, RULES_VERSION)
 
-**Магические паспорта для демо и тестов:**
+app = Application(app_id="app_0001", client_id="cli_0001", passport_hash="f727a849055f2224",
+                  age=32, income=120000, employment="employed", family="married",
+                  amount=500000, term=24, product_id="prod_standard")
+bki = BkiResult(status="SUCCESS", score=720, delinquency=False, requests_90d=1)   # status: SUCCESS|TIMEOUT|ERROR|NOT_CALLED
+smev = "MATCH"                                                                     # MATCH|MISMATCH|TIMEOUT|NOT_CALLED
 
-| Паспорт | Поведение |
-|---|---|
-| `0000 000001` | идеальный клиент: паспорт ок, работа подтверждена, БКИ отдаёт историю `demo.good` (самая низкая PD) |
-| `0000 000002` | плохая история: БКИ отдаёт историю `demo.bad` (высокая PD, есть текущая просрочка) |
-| `0000 000003` | СМЭВ: паспорт недействителен |
-| `0000 000004` | БКИ: `found=false` (нет кредитной истории) |
-| `0000 000005` | пограничный клиент: история `demo.borderline` (балл в зоне 600–679) |
-| `0000 000006` | БКИ: **самозапрет на кредиты** (`self_ban=true`), история как у идеального клиента |
+local = evaluate(app, bki=None, smev=None)   # только правила 1–5: local.decision is None → нужны внешние сервисы
+r = evaluate(app, bki=bki, smev=smev, fraud_flagged=False)
+r.decision, r.reason, r.score, r.dti, r.monthly_payment
+r.amount_approved, r.term_approved, r.rate        # None, если не APPROVED
+r.breakdown        # [{"feature": "income", "label_ru": "Доход", "value": 120000, "points": 20, "max": 30}, ...]
+r.trace            # [{"n": 1, "code": "AGE_OUT_OF_RANGE", "check_ru": "Возраст 18–70", "value": "32", "passed": True}, ...] до сработавшего
+r.score_capped_to_zero, r.rules_version
+r.to_dict()        # JSON-совместимый словарь
 
-### СМЭВ: `POST /smev/v1/verify`
-Запрос: `{"passport": "...", "passport_issue_date": "YYYY-MM-DD", "passport_division_code": "NNN-NNN", "full_name": "...", "birth_date": "YYYY-MM-DD", "employer_inn": "...", "declared_income": 120000}`
-Ответ:
-```json
-{"request_id": "smev-<uuid>", "passport_valid": true, "person_match": true,
- "employment_confirmed": true, "confirmed_income": 115000}
+REASONS["HIGH_DTI"]  # {"category": "Отказ"|"Нужны данные"|"Ручная проверка", "client_text": "...", "staff_text": "...", "in_csv": True}
 ```
-`confirmed_income` — доход по данным ФНС/СФР (≈ заявленный ±15%, иногда `null`, если не нашли).
-**СМЭВ детерминирован, без случайных отказов:** `passport_valid=false` только если паспорт просрочен по правилу 20/45 лет
-(исполнилось 20 или 45, паспорт выдан до этой даты, прошло больше 90 дней), не проходит проверки `common/passport.py`
-или стоит в «реестре недействительных» (магический `0000 000003`). `employment_confirmed=false` только при стаже 0.
 
-### БКИ: `POST /bki/v1/report`
-Запрос: `{"passport": "...", "full_name": "...", "birth_date": "YYYY-MM-DD"}`
-Ответ:
-```json
-{"report_id": "bki-<uuid>", "found": true,
- "loans": [ {"rn": 1, "pre_since_opened": 18, "pre_loans_credit_limit": 11, "...": 0,
-             "enc_paym_0": 0, "...": 0, "enc_paym_24": 4,
-             "enc_loans_credit_type": 4, "enc_loans_credit_status": 3, "pclose_flag": 0, "fclose_flag": 0} ],
- "monthly_debt_payment": 12000, "total_debt": 340000,
- "inquiries_30d": 1, "inquiries_6m": 2,
- "self_ban": false, "self_ban_since": null}
-```
-- **`self_ban`** — самозапрет на кредиты, установленный через Госуслуги (закон с 1 марта 2025); `self_ban_since` — дата установки.
-  Эмулятор отвечает детерминированно: у ~2% паспортов самозапрет есть, у магического `0000 000006` — всегда. Не зависит от `found`.
-- **`loans` — настоящая обезличенная кредитная история клиента российского банка** из датасета Альфа-Банка (раздел 4):
-  все поля строки датасета, кроме `id`, по одной записи на кредит. Эмулятор выбирает историю из пула
-  `ml/artifacts/bki_pool.parquet` по `sha256(passport) % N`, поэтому ответ детерминирован.
-  ~4% паспортов → `found=false`, `loans=[]`.
-- `monthly_debt_payment`, `total_debt`, `inquiries_*` — синтетические (в датасете сумм нет), нужны правилам ПДН.
-  Генерируются из того же seed и согласованы с числом кредитов в `loans` (нет кредитов → 0).
-- Если `found=false` — денежные поля `null`, `loans = []`.
+## 3. Внешние сервисы (Go, `services/`)
 
-### Хаос-режим (для демо отказов): `GET/PUT /chaos` на каждом эмуляторе
-```json
-{"mode": "normal", "delay_ms": 0}
-```
-`mode`: `normal` | `slow` (ответ через `delay_ms`, по умолчанию 4000) | `error` (HTTP 503) | `timeout` (висит 30 c) | `bad_signature` (ответ с неверной подписью) | `flaky` (50% запросов → 503).
-`/chaos` не требует подписи (это служебная ручка стенда), но доступна только с localhost.
-`GET /health` → `{"status": "ok", "service": "smev"|"bki"}`.
+Один Go-модуль `services/` (`cmd/smev`, `cmd/bki`, `cmd/tokenizer`, общий код в `internal/`). Без сторонних зависимостей, кроме `github.com/cloudflare/circl` для OPRF.
 
-## 4. ML-модель: пакет `ml/credit_model` (версия 4 — Альфа-Банк)
+**Подпись** — та же схема, что `common/signing.py`: `X-Signature = hex(HMAC-SHA256(secret, "<ts>.<тело>"))`, `X-Timestamp`, окно 300 с.
+Подписываются и запрос backend, и ответ сервиса. Секреты: `SMEV_HMAC_SECRET`, `BKI_HMAC_SECRET`, `TOKENIZER_HMAC_SECRET`. Неверная подпись → 401.
+
+**Детерминизм** строго по спецификации организаторов (`06_external_services.md`):
+
+### БКИ: `POST /bki/score` (образец организаторов, не меняем)
+Запрос `{"passport_hash": "a1b2c3d4e5f6a7b8"}` → ответ `{"score": 720, "delinquency": false, "requests_90d": 1}`.
+`h = int(md5(passport_hash), 16) % 10`: `h ≤ 5` → `600 + 20h`, без просрочки; `6 ≤ h ≤ 8` → `450 + 50(h−6)`, без просрочки; `h = 9` → `400`, просрочка. `requests_90d = 1`.
+
+### БКИ: `POST /bki/report` (наше расширение: полный отчёт для ML-подсказки)
+Запрос `{"passport_hash": "..."}` → `{"found": true, "loans": [ {…строка датасета Альфа-Банка без id…} ]}`.
+История берётся из пула `services/bki/data/bki_pool.json.gz` (экспорт `ml/export_bki_pool.py` из `ml/artifacts/bki_pool.parquet`).
+Пул разбит на 3 корзины по PD модели (хорошие / средние / плохие истории). Корзина выбирается тем же `h`: 0–5 → хорошие, 6–8 → средние, 9 → плохие;
+номер истории в корзине — `int(md5(passport_hash), 16) // 10 % len(корзины)`. Так скор БКИ и история не противоречат друг другу.
+
+### СМЭВ: `POST /smev/check`
+Запрос `{"client_id": "cli_0001", "passport_hash": "..."}` → `{"status": "MATCH"}` или `{"status": "MISMATCH"}`.
+`h = int(md5(client_id), 16) % 10`; `h == 0` → `MISMATCH`, иначе `MATCH` (9 из 10). `TIMEOUT` и `NOT_CALLED` ставит backend, а не эмулятор.
+
+### Токенизатор паспорта: раздел 5.
+
+### Хаос-режим (для демо): `GET/PUT /chaos` на СМЭВ и БКИ
+`{"mode": "normal"|"slow"|"timeout"|"error"|"bad_signature"|"flaky", "delay_ms": 0}`. `slow` — ответ через `delay_ms` (по умолчанию 4000),
+`timeout` — висит 30 с, `error` — 503, `flaky` — 50% запросов 503. Без подписи, только с localhost и сетей из `CHAOS_ALLOW_NETS`.
+`GET /health` → `{"status": "ok", "service": "smev"|"bki"|"tokenizer"}`.
+
+### Вызовы из backend
+Таймаут 3 с, 2 попытки, повтор только на таймаут и 5xx, пауза 0,3 с. СМЭВ и БКИ вызываются **параллельно** (время ответа — максимум, а не сумма).
+Проверка подписи ответа; неверная подпись → `ERROR` + событие безопасности в аудит.
+Каждая попытка → строка в таблице `external_requests` **и** строка JSON в `logs/external.log`:
+`{"timestamp": "2026-11-02T10:00:00Z", "service": "BKI", "request_id": "req_0001", "app_id": "app_0001", "attempt": 1, "status": "SUCCESS"|"TIMEOUT"|"ERROR", "latency_ms": 420, "result": {"score": 720}}`.
+В `result` нет ПДн (только скор, флаг просрочки, статус СМЭВ).
+
+## 4. ML — подсказка андеррайтеру
+
+Модель (раздел 4.1 ниже, без изменений с v4) скорит кредитную историю из `POST /bki/report`. Результат — `ml_hint` в карточке заявки
+**только для андеррайтера и аудитора**: PD, балл модели, вклад признаков (SHAP), тепловая карта платежей. На `decision` не влияет.
+Пример фразы для интерфейса: «Модель на реальных историях Альфа-Банка: риск дефолта 2,1% — ниже среднего. Решение принимают правила.»
+Если отчёт БКИ недоступен — `ml_hint: null`, конвейер не падает.
+
+### 4.1 Модель (из v4; пороги 680/600 больше ничего не решают — балл модели показывается только как подсказка)
+
 
 **Датасет (основной) — Альфа-Банк, «Кредитный скоринг на данных кредитных историй»**
 (соревнование Kaggle `alfa-bank-pd-credit-history`, данные с ODS.ai «DL Fintech БКИ»; копия, которую мы скачали: Kaggle `mikhailkostin/dlfintechbki`).
@@ -203,7 +270,7 @@ model.metrics        # metrics.json
 
 Перевод вероятности в баллы (как в банковских скоркартах):
 `score = 600 + 20/ln2 * ln((1-pd)/pd / BASE_ODDS)`, обрезка 300..850.
-Пороги фиксированы: **одобрение ≥ 680, ручная проверка 600–679, отказ < 600**.
+Пороги 680/600 используются только для цветовой подсказки андеррайтеру (низкий / средний / высокий риск).
 `BASE_ODDS` подбирается при обучении: на отложенной выборке ≈ 60–70% одобрений и ≈ 10–20% ручной проверки. Сохраняется в `metrics.json` → `scale`.
 Вклад признака в баллах = SHAP-значение в log-odds «хорошего» × `20/ln2`.
 
@@ -230,178 +297,177 @@ model.metrics        # metrics.json
  "trained_at": "ISO-8601"}
 ```
 
-## 5. Логика решения (backend, `pipeline`)
 
-Этапы и их `stage`-id: `validation` → `smev` → `bki` → `antifraud` → `scoring` → `decision`.
+## 5. Паспорт не покидает устройство клиента (OPRF, RFC 9497)
 
-1. **validation** — правила из раздела 2.
-2. **smev** — таймаут 3 c, 2 повтора с паузой 0.3/0.6 c (только на 5xx/таймаут). Проверка HMAC ответа.
-3. **bki** — то же.
-4. **antifraud** — граф связей и поведение заявки (раздел 9). Только предупреждение. Для магических паспортов этап `skipped`.
-5. **scoring** — `model.predict_history(bki.loans)`.
-6. **decision**:
-   - **Стоп-факторы → отказ:** **самозапрет** (`self_ban=true`, код `SELF_BAN`, «Клиент установил самозапрет на кредиты через Госуслуги»); `passport_valid=false`; `person_match=false`; ПДН > 0.8, где ПДН (показатель долговой нагрузки, его требует ЦБ) = (БКИ `monthly_debt_payment` + платёж по новому кредиту) / monthly_income — считается в backend, в модель не идёт; **стоп-правила по кредитной истории из `model.metrics["stop_rules"]`** — подобраны по данным (доля дефолтов ≥ 3× средней, доля заявок ≤ 5%), формат `{code, feature, op, value, text_ru, share, default_rate}`. Backend применяет их к `p.features`, ничего не хардкодит.
-   - **Деградация → ручная проверка:** антифрод пометил заявку (`FRAUD_SUSPECT` — предупреждение, не отказ); СМЭВ или БКИ недоступны после повторов; неверная подпись ответа (плюс событие безопасности в аудит); `found=false` в БКИ (нет истории — скорить нечем, решает человек); `employment_confirmed=false`; `inquiries_30d >= 5`; ПДН 0.5–0.8 при балле 680–719 (одобрение, но не уверенное, плюс высокая нагрузка — пусть посмотрит человек). При балле ≥ 720 и ПДН 0.5–0.8 — одобрение с пометкой `DTI_ELEVATED`.
-   - Иначе по баллу: `>= 680` одобрить, `600..679` ручная проверка, `< 600` отказ.
-   - `reasons` — список причин по-русски (`{"code": "DTI_TOO_HIGH", "text": "Долговая нагрузка 86% > 80%"}`).
+**Задача.** Кейс требует хранить только `passport_hash`. Простой SHA-256 номера паспорта небезопасен: номеров всего ~10¹⁰, хэш перебирается за минуты.
+HMAC с секретом на сервере безопасен, но тогда сервер видит номер. OPRF даёт оба свойства: **сервер не видит номер, а хэш нельзя перебрать без ключа сервера**.
 
-**Статусы заявки и разрешённые переходы:**
-`received → processing → approved | rejected | manual_review`; `manual_review → approved | rejected` (только risk_manager).
-Любой другой переход — ошибка 409. Ручное решение (`/review`) принимается только для заявки в `manual_review`, иначе 409.
+**Протокол** (VOPRF, набор `P256-SHA256`, режим verifiable):
+1. Браузер проверяет формат паспорта (`NNNN NNNNNN`, регион серии по ОКАТО, номер не `000000` — логика `common/passport.py`, перенесённая в `frontend/src/lib/passport.ts`; это удобство, а не защита).
+2. Браузер нормализует номер (10 цифр), «ослепляет» его случайным числом (`@cloudflare/voprf-ts`) и отправляет `POST /api/v1/passport/oprf {"blinded": "<base64>"}`.
+3. Backend (только роль client, лимит 5 в минуту и 20 в час на клиента) подписывает и пересылает в токенизатор `POST /oprf/v1/evaluate`.
+4. Токенизатор (Go, `circl/oprf`) применяет секретный ключ и возвращает `{"evaluated": "<base64>", "proof": "<base64>"}`. Номера он тоже не видит.
+5. Браузер проверяет доказательство (DLEQ) открытым ключом (`GET /api/v1/passport/public-key` → `{"suite": "P256-SHA256", "public_key": "<base64>"}`),
+   снимает ослепление и получает 32 байта выхода OPRF. `passport_hash = hex(SHA-256("sad-passport-v1" ‖ выход))[:16]`.
+6. В заявку уходит только `passport_hash`.
 
-**Идемпотентность:** заголовок `Idempotency-Key` в `POST /api/applications` обязателен.
-Тот же ключ + то же тело → тот же ответ (заявка не создаётся второй раз). Тот же ключ + другое тело → 409.
+**Ключ** — `OPRF_PRIVATE_KEY` (base64) или файл `secrets/oprf.key` (генерируется при первом старте, права 600). Ключ есть только у токенизатора.
+Токенизатор слушает только `127.0.0.1` (в Docker — внутренняя сеть), наружу не публикуется.
 
-## 6. Безопасность
+**Честные ограничения (пишем в документах):** проверку формата в браузере злоумышленник может обойти — настоящая проверка паспорта в жизни делается через СМЭВ;
+в реальном банке паспорт всё равно понадобится при оформлении кредита (115-ФЗ), а для **предварительного** решения он банку не нужен.
+Демо-интерфейс для жюри показывает анимацию «что видит сервер»: `blinded` — случайные байты, разные при каждой попытке.
 
-**Роли (RBAC):**
+## 6. Роли, вход и безопасность
 
-| Действие | operator | risk_manager | auditor | admin |
-|---|:-:|:-:|:-:|:-:|
-| Создать заявку | ✅ | – | – | ✅ |
-| Смотреть заявки | свои | все | все | все |
-| Решение по ручной проверке | – | ✅ | – | – |
-| What-if (ползунки) | ✅ | ✅ | – | ✅ |
-| Инфо о модели, статистика | ✅ | ✅ | ✅ | ✅ |
-| Журнал аудита + проверка цепочки | – | – | ✅ | ✅ |
-| Хаос-панель, массовая симуляция | – | – | – | ✅ |
+### 6.1 Роли (матрица из `ИБ.md` организаторов)
 
-Учётки секретные: при первом запуске backend генерирует по одной на роль (случайный логин вида `op.7f3a9c`, пароль ≥ 16 символов из `secrets.token_urlsafe`) и пишет в `secrets/credentials.local.json` (+ таблица `.md`, права 600, папка в `.gitignore`; путь — env `CREDENTIALS_FILE`). Публичных паролей нет. Пароли в БД — только bcrypt. Регистрации нет: учётки выдаёт администратор.
+| Действие | client | system | underwriter | auditor |
+|-|:-:|:-:|:-:|:-:|
+| Подать заявку | да | да (симулятор) | нет | нет |
+| Посмотреть решение | только свои (по client_id) | да | да | да |
+| Пересчитать решение | нет | да (автоповтор после таймаута) | да | нет |
+| Ручное решение по MANUAL_REVIEW | нет | нет | да | нет |
+| Читать аудит | нет | нет | нет | да |
+| Менять правила скоринга | нет | нет | нет | нет — только через код и ревью, версия правил пишется в каждое решение |
+| Удалять аудит | нет | нет | нет | нет (append-only) |
 
-**Защита входа:**
-- 5 неверных паролей подряд для логина → блокировка на 15 минут (429 + запись в аудит);
-- не больше 10 попыток входа в минуту с одного IP;
-- JWT живёт 60 минут; у пользователя есть `token_version`, `POST /api/auth/logout-all` её увеличивает, и все старые токены становятся недействительными;
-- ответ на неверный логин и неверный пароль одинаковый (нельзя угадать существующие логины).
-- Тело запроса — не больше 64 КБ. Заголовки безопасности: `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Cache-Control: no-store` (nginx фронта добавляет ещё CSP).
-- Секреты: пустой секрет — отказ старта всегда; демонстрационный или короче 32 символов — отказ при `APP_ENV=production`, в разработке предупреждение. В production не раздаются `/docs` и `/openapi.json`.
-- `Idempotency-Key`: до 128 символов `[A-Za-z0-9._:-]`; пароль до 128 символов, логин до 64.
+Служебная роль **admin** (вне матрицы кейса, «пульт стенда для демо»): хаос-режим, симулятор, пакетный прогон CSV. Роль **operator** удалена.
 
-**PII:** паспорт в БД не хранится в открытом виде: `passport_hash = HMAC-SHA256(PII_PEPPER, passport)` + маска `45** ****56`.
-Наружу отдаётся только маска: ФИО → `Иванов И. И.`, телефон → `+7 999 ***-**-67`.
+### 6.2 Вход клиента
 
-**Аудит:** таблица `audit_log(id, ts, actor, role, action, entity, entity_id, details, prev_hash, hash)`,
-`hash = sha256(prev_hash + каноничный JSON остальных полей)`. Записываем: вход, создание заявки, каждое решение, ручное решение, смену хаос-режима, ошибки подписи, отказ в доступе (403).
+Клиент — это проверенный номер телефона. В БД: `clients(client_id "cli_NNNN", phone_hash = HMAC(PII_PEPPER, "+7XXXXXXXXXX"), phone_masked "+7 999 ***-**-67",
+telegram_chat_id NULL, created_at)` и `client_identities(provider, subject_hash = HMAC(PII_PEPPER, provider:uid), client_id)`. Открытый номер не хранится.
+Один и тот же телефон через разные способы входа → один клиент.
 
-## 7. API backend (`/api`, JSON, токен `Authorization: Bearer <jwt>`)
+| Способ | Как работает | Переменные |
+|-|-|-|
+| `telegram` | `POST /api/v1/auth/phone/start {phone, channel: "telegram"}` → `{challenge_id, deep_link: "https://t.me/<bot>?start=<nonce>", expires_in: 300}`. Бот (long polling внутри backend) просит «Поделиться номером»; принимаем только **свой** контакт (`contact.user_id == from.id`) и только совпадающий номер | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_USERNAME` |
+| `call` | SMS.RU callcheck: `POST start {phone, channel: "call"}` → `{challenge_id, call_to: "+7 …", expires_in: 300}`; клиент звонит, звонок сбрасывается, backend опрашивает статус | `SMSRU_API_ID` |
+| `yandex` | OAuth: `GET /api/v1/auth/oauth/yandex/start` → `{authorize_url}`; фронт на `/auth/callback/yandex` отправляет `POST /api/v1/auth/oauth/yandex/callback {code, state}`; телефон из `default_phone` | `YANDEX_CLIENT_ID`, `YANDEX_CLIENT_SECRET` |
+| `vk` | VK ID OAuth 2.1 + PKCE: то же с `/vk/`, в callback ещё `device_id`; телефон из `user_info` | `VK_CLIENT_ID` |
+| `demo` | код из 6 цифр показывается прямо на экране с пометкой «демо». Включён, если `AUTH_DEMO=1` или ни один способ не настроен; при `APP_ENV=production` — только явным `AUTH_DEMO=1` | `AUTH_DEMO` |
 
-| Метод и путь | Роли | Что делает |
-|---|---|---|
-| `POST /api/auth/login` `{username, password}` | все | → `{access_token, username, role}` |
-| `GET /api/auth/me` | все | → `{username, role}` |
-| `POST /api/applications` + `Idempotency-Key` | operator, admin | → `202 {id, status: "processing"}`; конвейер идёт в фоне |
-| `GET /api/applications?status=&limit=50` | см. RBAC | → `[ApplicationSummary]` |
-| `GET /api/applications/{id}` | см. RBAC | → `ApplicationDetail` |
-| `POST /api/applications/{id}/review` `{decision, comment}` | risk_manager | ручное решение |
-| `POST /api/score/whatif` `{<признаки модели>}` | operator, risk, admin | → `Prediction` без сохранения |
-| `GET /api/model/features` | все | → `{feature_specs, paym_codes}` |
-| `GET /api/model/info` | все | → `metrics.json` |
-| `GET /api/stats` | все | → сводка (см. ниже) |
-| `POST /api/simulate` `{count: 1..300, scenario}` | admin | генерирует заявки и прогоняет через конвейер; `scenario`: `normal` (по умолчанию) \| `fabric` \| `carousel` \| `probing` \| `mixed` (раздел 9) |
-| `GET /api/simulate/labels` | admin | правда о последней симуляции `{app_id: normal\|fabric\|carousel\|probing}` — чтобы измерить качество антифрода |
-| `GET /api/antifraud/graph?minutes=60` | admin, risk_manager, auditor | граф связей заявок (раздел 9) |
-| `GET/PUT /api/chaos/{smev\|bki}` | admin | прокси к `/chaos` эмулятора |
-| `GET /api/audit?limit=100` | auditor, admin | → записи журнала |
-| `GET /api/audit/verify` | auditor, admin | → `{ok, checked, broken_at: id\|null}` |
-| `POST /api/events/ticket` | все | → `{ticket, expires_in: 30}`: одноразовый билет для SSE |
-| `GET /api/events/stream?ticket=<билет>` | все | SSE-поток событий (JWT в адрес не кладём: он попал бы в логи) |
-| `GET /api/health` | – | → статусы backend, smev, bki, модели |
+Опрос: `GET /api/v1/auth/phone/{challenge_id}` → `{status: "pending"|"verified"|"expired"|"mismatch", access_token?}`; для demo — `POST /api/v1/auth/phone/{challenge_id}/code {code}`.
+`state` OAuth — одноразовый, 10 минут, хранится на сервере. Лимиты: 3 старта на номер за 10 минут, 10 на IP в час, 5 неверных демо-кодов → challenge сгорает.
+`GET /api/v1/auth/providers` → какие способы включены (фронт показывает только их).
+Если клиент вошёл через Telegram, бот присылает уведомление о решении (без сумм и ПДн: «Решение по заявке app_0012 готово — откройте приложение»).
+
+### 6.3 Сотрудники
+Как в v5: учётки генерируются при первом старте в `secrets/credentials.local.{json,md}` (по одной на роль: underwriter, auditor, admin), bcrypt,
+5 ошибок → блок 15 минут, 10 входов в минуту с IP, JWT 60 минут, `token_version`, `logout-all`. `POST /api/v1/auth/staff/login {username, password}`.
+
+### 6.4 Остальное (сохраняется из v5)
+Заголовки безопасности, лимит тела 64 КБ, секреты: пустой — отказ старта, демо/короткий — отказ при `APP_ENV=production`; `/docs` выключены в проде;
+`Idempotency-Key` обязателен для `POST /applications` (тот же ключ + то же тело → тот же ответ, другое тело → 409); лимит 60 заявок в минуту на пользователя;
+**одна активная заявка на паспорт** (`PROCESSING` или `MANUAL_REVIEW`) → 409 `duplicate_application` (кроме принятого встречного предложения; `DUPLICATE_CHECK=off` для демо).
+
+## 7. API backend (`/api/v1`, JSON, `Authorization: Bearer <jwt>`)
+
+| Метод и путь | Роли | Ответы |
+|-|-|-|
+| `GET /health` и `GET /api/v1/health` | все | `{status, services: {smev, bki, tokenizer, model}}` |
+| `GET /api/v1/products` | все | `[Product]` |
+| `POST /api/v1/quote` `{age, income, employment, family, amount, term, product_id}` | client | предварительный расчёт без БКИ: `{dti, monthly_payment, partial_score, max_partial_score: 90, eligible_products, blocking: [reason]}` — ничего не сохраняет |
+| `POST /api/v1/passport/oprf`, `GET /api/v1/passport/public-key` | client | раздел 5 |
+| `POST /api/v1/applications` + `Idempotency-Key` | client, admin (симулятор) | **201** `{app_id, status: "PROCESSING"}`; **422** `Error`; **409** дубликат/ключ |
+| `GET /api/v1/applications?status=&limit=` | client — свои; underwriter, auditor, admin — все | `[ApplicationSummary]` |
+| `GET /api/v1/applications/{id}` | как выше | `ApplicationDetail` |
+| `GET /api/v1/applications/{id}/decision` | как выше | **200** `Decision`; **404**; **425** ещё считается |
+| `POST /api/v1/applications/{id}/recalculate` | underwriter | **200** `Decision` (новая версия решения, action `recalculated`); **409** если `PROCESSING` |
+| `POST /api/v1/applications/{id}/review` `{decision: "APPROVED"|"REFUSED", comment}` | underwriter | только из `MANUAL_REVIEW`, иначе 409 |
+| `POST /api/v1/applications/{id}/accept-offer` `{offer_index}` + `Idempotency-Key` | client (своя заявка) | **201** новая заявка с параметрами предложения и тем же `passport_hash`, `parent_app_id` |
+| `GET /api/v1/applications/{id}/certificate.pdf` | client (своя, APPROVED) | PDF-справка (раздел 10) |
+| `POST /api/v1/verify` `{payload, signature}` | все, без входа | `{valid, revoked, data}` |
+| `GET /api/v1/verify/public-key` | все | `{alg: "Ed25519", public_key}` |
+| `POST /api/v1/batch` (multipart CSV до 1 МБ) | underwriter, admin | прогон через `credit_core`: `{summary, rows: [{app_id, decision, reason, score, dti, csv_decision, csv_reason, match, explanation}]}` + `GET /api/v1/batch/last.csv` |
+| `GET /api/v1/model/info`, `GET /api/v1/model/features` | underwriter, auditor | как в v5 |
+| `GET /api/v1/stats` | underwriter, auditor, admin | сводка по статусам и причинам |
+| `GET /api/v1/audit?limit=&app_id=`, `GET /api/v1/audit/verify` | auditor | журнал и проверка цепочки |
+| `GET /api/v1/external?app_id=&limit=` | auditor, underwriter | журнал вызовов внешних сервисов |
+| `GET/PUT /api/v1/chaos/{smev|bki}`, `POST /api/v1/simulate`, `GET /api/v1/simulate/labels` | admin | пульт стенда |
+| `GET /api/v1/antifraud/graph` | underwriter, auditor, admin | как в v5 |
+| `POST /api/v1/events/ticket`, `GET /api/v1/events/stream?ticket=` | все | SSE; client получает события только своих заявок |
 
 ```jsonc
+// Error (422/409/404/425/429)
+{"error_code": "AGE_OUT_OF_RANGE", "message": "Возраст не соответствует условиям продукта", "retryable": false,
+ "details": {"fields": {"age": "Возраст должен быть от 18 до 70 лет"}}}
+
+// Decision — поля кейса + наши расширения
+{"app_id": "app_0001", "decision": "APPROVED", "reason": "", "reason_text": "",
+ "score": 75, "dti": 0.21, "monthly_payment": 24962,
+ "amount_approved": 500000, "term_approved": 24, "rate": 0.18, "product_id": "prod_standard",
+ "bki": {"score": 720, "delinquency": false}, "smev": "MATCH",
+ "breakdown": [ ... ], "trace": [ ... ], "offers": [ ... ],
+ "rules_version": "2026.11-1", "version": 1, "decided_by": "system"|"underwriter", "decided_at": "ISO"}
+
 // ApplicationSummary
-{"id": "app_8f3k2", "created_at": "ISO", "full_name_masked": "Иванов И. И.",
- "loan_amount": 500000, "loan_term_months": 24, "status": "approved",
- "score": 712, "created_by": "operator", "total_ms": 845}
+{"app_id", "client_id", "created_at", "status", "reason", "amount", "term", "product_id", "score", "total_ms"}
 
-// ApplicationDetail = ApplicationSummary +
-{"passport_masked": "45** ****56", "phone_masked": "+7 999 ***-**-67",
- "monthly_income": 120000, "employment_months": 36, "dependents": 1, "purpose": "consumer",
- "monthly_payment": 24962,
- "stages": [{"stage": "smev", "status": "ok", "duration_ms": 312, "attempts": 1,
-             "detail": "Паспорт действителен, работа подтверждена"}],
- "features": {"<признак модели>": 0, "...": 0},
- "pdn": 0.34,
- "fraud": {"fraud_score": 0.87, "flagged": true, "pattern": "fabric", "pattern_ru": "кредитная фабрика",
-           "similarity": 0.91, "anomaly": 0.4, "component_size": 6, "cluster_id": "app_x1",
-           "explanation": [{"feature": "n_dev_passports", "label_ru": "Разных паспортов на этом устройстве", "value": 5, "share": 0.5}],
-           "text": "Похожа на схему «кредитная фабрика» на 91%: 6 разных паспортов с одного устройства; …"} | null,  // null — этап не выполнялся (демо-паспорт)
- "bki_loans": [{"rn": 1, "credit_type": 4, "status": 3, "closed": false,
-                "paym": [0, 0, 0, 1, 0, "..."]}],   // 25 статусов, [0] — самый свежий месяц; для «тепловой карты» истории
- "prediction": {"pd": 0.031, "score": 712, "base_score": 640,
-                "contributions": [{"feature": "", "label_ru": "", "value": 0, "points": 0}]},
- "reasons": [{"code": "SCORE_HIGH", "text": "Балл 712 ≥ 680"}],
- "review": {"by": "risk", "decision": "approved", "comment": "", "at": "ISO"} | null}
+// ApplicationDetail = Summary + поля анкеты (age, income, employment, family) + "passport_hash_short": "f727a8…"
+//   + "stages": [{"stage", "status": "pending|running|ok|warn|fail|skipped", "duration_ms", "attempts", "detail"}]
+//   + "decision": Decision | null + "decisions_history": [Decision]
+//   + "external": [ExternalRequest]            (underwriter, auditor)
+//   + "ml_hint": {...} | null                   (underwriter, auditor)
+//   + "fraud": {...} | null                     (underwriter, auditor, admin; клиенту никогда)
+//   + "review": {"by", "decision", "comment", "at"} | null
 
-// stage.status: "pending" | "running" | "ok" | "warn" | "fail" | "skipped"
-
-// SSE-события (event: <type>, data: JSON)
-// event: stage     {"application_id", "stage", "status", "duration_ms", "attempt", "detail"}
-// event: decision  {"application_id", "status", "score", "reasons"}
-// event: fraud     {"application_id", "fraud_score", "pattern", "similarity", "text"}   (антифрод пометил заявку; оператору — по своим)
-// event: graph     {"node": {"id", "status", "fraud_score"}, "edges": [{"a", "b", "kind"}], "cluster_id", "cluster_size"}   (risk_manager, auditor, admin)
-// event: chaos     {"service", "mode"}
-// event: security  {"kind": "bad_signature"|"forbidden", "detail"}   (только auditor и admin)
-// operator получает stage/decision только по своим заявкам; не больше 10 потоков на пользователя
-
-// GET /api/stats
-{"total": 0, "by_status": {"approved": 0, "rejected": 0, "manual_review": 0, "processing": 0},
- "approval_rate": 0.0, "avg_score": 0, "avg_stage_ms": {"smev": 0, "bki": 0, "scoring": 0},
- "score_histogram": {"bins": [], "counts": []},
- "timeline": [{"minute": "ISO", "approved": 0, "rejected": 0, "manual_review": 0}],
- "services": {"smev": "normal", "bki": "normal"}}
+// SSE: stage, decision (как в v5, но статусы в верхнем регистре), fraud, graph, chaos, security
 ```
 
-## 8. Структура репозитория
+Статусы заявки: `PROCESSING → APPROVED | REFUSED | NEED_MORE_DATA | MANUAL_REVIEW`; `MANUAL_REVIEW → APPROVED | REFUSED` (review);
+пересчёт — из любого итогового статуса. **Автоповтор (actor = system):** заявки `NEED_MORE_DATA / EXTERNAL_TIMEOUT` перепроверяются раз в 60 с, до 10 раз, когда оба сервиса здоровы.
+
+## 8. Модель данных (SQLite, без ORM; ER — в `08_ER.md`)
+
+- `clients` — раздел 6.2.
+- `applications(app_id, client_id, passport_hash, age, income, employment, family, amount, term, product_id, channel, client_device_id_hash, parent_app_id, status, created_at, total_ms, idempotency_key)`.
+- `decisions(id, app_id, version, decision, reason, score, dti, monthly_payment, amount_approved, term_approved, rate, bki_score, bki_delinquency, smev_status, rules_version, decided_by, decided_at, offers_json)` — история, не перезаписывается.
+- `scoring_results(id, app_id, decision_version, feature, value, points, max_points)`.
+- `external_requests(request_id "req_NNNN", app_id, service, attempt, status, latency_ms, result_json, at)`.
+- `audit_log(id, ts, actor, role, action, entity, entity_id, details, prev_hash, hash)` — хэш-цепочка как в v5.
+  Наружу отдаём в формате кейса: `event_id "evt_NNNN", app_id, action, decision, reason, score, dti, actor, at` (+ `prev_hash`, `hash`).
+  `action`: `application_created`, `decision_made`, `recalculated`, `reviewed`, `offer_accepted`, `certificate_issued`, `login`, `login_failed`, `access_denied`, `chaos_changed`, `signature_error`.
+  Срок хранения — 5 лет (как документы по 115-ФЗ); ПДн в журнале нет (только `client_id`, `app_id`, хэши).
+- `products` — из `credit_core`, в БД не дублируем.
+- Новая БД: файл `credit_v6.sqlite` (старую не мигрируем).
+
+## 9. Антифрод (адаптация v5)
+
+Механизм тот же (граф по HMAC-отпечаткам, эмбеддинг → Scaler → PCA → kNN к эталонам + IsolationForest, порог 0,6, только предупреждение → `MANUAL_REVIEW / FRAUD_SUSPECT`).
+Связующие атрибуты теперь: `device` (`client_device_id` — приложение клиента создаёт случайный id и хранит в `localStorage`), `phone` (телефон аккаунта клиента),
+`passport` (`passport_hash`). Ребро `employer` удалено (ИНН больше не собираем). Признаки, зависевшие от ИНН и стажа, убрать или заменить
+(например, разброс заявленного дохода по одному паспорту — это и есть угроза U-4 «обход скоринга подбором суммы/дохода»).
+Симулятор и генераторы атак выдают заявки в формате 2.1. Встречное предложение, принятое клиентом, не считается «подбором».
+
+## 10. Вау-функции
+
+1. **Паспорт не покидает телефон** — раздел 5, на экране подачи анимация «что видит сервер».
+2. **Режим зала** — `/staff/hall` (underwriter, auditor, admin): на весь экран 3D-конвейер, по которому едут живые заявки (без ПДн), счётчики по статусам,
+   крупный QR на `https://credit.fashf.ru`. Жюри подаёт заявки со своих телефонов и видит их на большом экране.
+3. **Ломаем вживую** — пульт стенда: выключить БКИ → клиент видит «Проверяем данные, попробуйте позже» (NEED_MORE_DATA, а не отказ) → включить → автоповтор сам доводит заявку;
+   «подделать запись аудита» (только `APP_ENV != production`) → проверка цепочки показывает сломанную запись.
+4. **«Как получить одобрение»** — встречные предложения (2.6) с кнопкой «Подать с этими параметрами».
+5. **Справка о предварительном решении (PDF)** — подпись Ed25519 (`CERT_SIGNING_KEY` или `secrets/cert_ed25519.key`),
+   QR со ссылкой `https://credit.fashf.ru/verify#<payload_base64url>.<signature_base64url>` (данные во фрагменте — не попадают в логи сервера).
+   `payload = {app_id, decision, amount_approved, term_approved, rate, product_id, issued_at, valid_until: +30 дней, client: phone_masked}`.
+   Страница `/verify` проверяет подпись прямо в браузере (WebCrypto Ed25519) и спрашивает backend, не отозвано ли решение (`revoked`, если статус изменился).
+6. **Пакетный прогон 100 заявок в интерфейсе** — загрузка `applications.csv`, таблица решений, подсветка 9 расхождений с разметкой и объяснение каждого.
+
+## 11. Структура репозитория
 
 ```
-common/signing.py        HMAC-подпись (готово)
-emulators/app/           СМЭВ и БКИ          — сессия «emulators»
-emulators/tests/
-ml/train.py              обучение            — сессия «ml»
-ml/credit_model/         инференс + SHAP
-ml/artifacts/            model.cbm, metrics.json (коммитим, модель маленькая)
-ml/tests/
-backend/app/             FastAPI, конвейер, безопасность, аудит — сессия «backend»
-backend/tests/           5 обязательных тест-сценариев + остальное
-frontend/                Vite + Svelte 5 + TypeScript + ECharts — сессия «frontend»
-docs/                    контракты, журнал ИИ, словарь данных, тест-кейсы
+credit_core/            правила кейса (чистый Python)       — тимлид
+prototype/04_прототип.py консольный прототип                — тимлид
+data/case2/             applications.csv, products.csv      — тимлид
+services/               Go: smev, bki, tokenizer            — сессия «go-services»
+ml/                     модель (подсказка), export_bki_pool.py
+backend/app/            FastAPI, конвейер, API v1, аудит    — сессия «backend»
+backend/app/client_auth/ вход клиента (4 способа + демо)    — сессия «client-auth»
+backend/app/antifraud/  антифрод                            — сессия «antifraud»
+frontend/               Svelte 5: приложение клиента + бэк-офис — сессия «frontend»
+docs/                   контракты, журнал ИИ, документы кейса
 ```
-
-## 9. Антифрод: «кредитные фабрики» и дропы
-
-**Проблема.** Организованные группы оформляют кредиты на подставных людей (дропов). Каждая заявка по отдельности выглядит чистой и
-проходит скоринг, поэтому ловим по **связям и поведению**. Антифрод только предупреждает: заявка уходит в `manual_review` с причиной
-`FRAUD_SUSPECT`, отказа нет — честных людей не наказываем, решает человек.
-
-**Граф.** Узел — заявка. Ребро — общий **HMAC-отпечаток** (тот же `PII_PEPPER`, что для паспорта) связующего атрибута:
-`device` (**только** устройство клиента из поля `client_device_id`; без него ребра устройства нет вообще, фолбэка на браузер или IP оператора нет — иначе все честные клиенты одного оператора склеились бы в «фабрику»), `phone`, `passport`, `employer` (ИНН). Окна: устройство 6 ч, телефон 7 суток,
-паспорт 30 суток, работодатель 1 ч (иначе коллеги крупного работодателя склеивались бы навсегда). Новая заявка связывается не более чем с тремя последними
-заявками с тем же отпечатком. **В графе и в таблице `fraud_nodes` нет ни одного открытого значения.** Граф хранится в памяти, узлы — в SQLite; после перезапуска граф восстанавливается.
-
-**Канал заявки** — `online` (есть `client_device_id`) или `office`; сохраняется в `fraud_nodes.channel`, отдаётся в `fraud.channel` и входит в эмбеддинг (признак `is_online`).
-
-**Эмбеддинг заявки** (`backend/app/antifraud/features.py`, 20 чисел, без персональных данных): время подачи; пауза до соседних заявок того же устройства и работодателя;
-заявок с устройства/работодателя за час; разных паспортов на устройство и на телефон; сумма и срок; годовой доход к сумме; размер, плотность, рост за час и число паспортов
-в связанной группе; число кредитов и месяцев истории в БКИ; число заявок по тому же паспорту и разброс заявленного дохода.
-Модель: `StandardScaler` → PCA (8 осей) → 15 ближайших соседей среди эталонов (обычные + 3 схемы) плюс `IsolationForest` (обучен на обычных).
-`fraud_score = 0.75·доля_соседей_из_схем + 0.25·необычность`, `pattern` — преобладающая схема, `similarity` — её доля среди соседей.
-**Изолированная заявка (без единой связи) никогда не помечается** — одной короткой кредитной истории для подозрения мало.
-Порог: `fraud_score ≥ 0.6` (env `FRAUD_THRESHOLD`) либо заявка рядом (прямая сильная связь) с уже помеченной и сама набрала ≥ 0.35.
-Объяснение — топ-3 признака, в наибольшей степени сдвигающих заявку от «обычной» в сторону найденной схемы.
-
-**Эталоны — наши собственные.** Реальных размеченных данных о мошенничестве у нас нет. Эталоны схем порождают генераторы `backend/app/antifraud/attacks.py`
-по открытым описаниям схем (они же дают атаки симулятору):
-- `fabric` — 5–8 разных паспортов с одного устройства и одного работодателя-однодневки, пачкой за минуты, похожие суммы, часть историй короткие;
-- `carousel` — один телефон на 4–7 разных паспортов, устройства и работодатели разные;
-- `probing` — один человек подаёт 3–6 заявок на одну сумму, каждый раз завышая доход.
-Поэтому качество на симуляторе — это проверка механики, а не доказательство качества на реальных мошенниках.
-Первые 1–2 заявки группы ещё не отличить от честных: схема ловится по мере роста группы.
-
-**Симулятор.** `POST /api/simulate {count, scenario}` — `normal` | `fabric` | `carousel` | `probing` | `mixed` (≈70% обычных + ≥30% схем; при count ≥ 24 каждая из трёх схем представлена целой группой). Время событий для антифрода
-виртуальное (часы обычного потока сжимаются в секунды), `GET /api/simulate/labels` отдаёт правду о заявках последнего запуска.
-
-**API.** `GET /api/antifraud/graph?minutes=60` (admin, risk_manager, auditor) →
-`{"nodes": [{"id", "status", "fraud_score", "ts"}], "edges": [{"a", "b", "kind": "device|phone|passport|employer"}], "clusters": [{"id", "nodes", "score", "pattern"}]}`.
-`minutes` — окно РЕАЛЬНОГО времени появления заявок в графе (время событий у симулятора виртуальное, по нему окно строить нельзя). Только id заявок и типы связей.
-Демо-паспорта (`0000 00000N`) в антифрод не попадают (этап `skipped`): их подают снова и снова.
-Оператор вводит заявки клиентов из офиса со своего браузера, поэтому устройство оператора антифрод не использует. В симуляторе `client_device_id` задаёт сценарий (≈40% обычных заявок — онлайн, у остальных поля нет).
+Старые Python-эмуляторы `emulators/` удаляются (их заменяет Go).
