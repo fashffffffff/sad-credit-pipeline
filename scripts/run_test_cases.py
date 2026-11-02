@@ -10,6 +10,7 @@
 """
 
 import argparse
+import base64
 import os
 import random
 import sys
@@ -355,13 +356,20 @@ def case_duplicate(api: Api):
 def case_oprf(api: Api):
     c = Checks()
     client = api.new_client()
-    blinded = "A" + "".join(random.choice("abcdef0123456789") for _ in range(43)) + "="
+    # настоящее «ослеплённое» значение — сжатая точка кривой P-256 (как у браузерной библиотеки voprf-ts)
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+    point = ec.generate_private_key(ec.SECP256R1()).public_key().public_bytes(Encoding.X962, PublicFormat.CompressedPoint)
+    blinded = base64.b64encode(point).decode()
+    garbage = api.http.post("/api/v1/passport/oprf", json={"blinded": base64.b64encode(b"x" * 33).decode()},
+                            headers=client["headers"])
     r = api.http.post("/api/v1/passport/oprf", json={"blinded": blinded}, headers=client["headers"])
     k = api.http.get("/api/v1/passport/public-key", headers=client["headers"])
     forbidden = api.http.post("/api/v1/passport/oprf", json={"blinded": blinded}, headers=api.staff("underwriter"))
     c.fact(f"OPRF-прокси: HTTP {r.status_code} (поля {sorted(r.json())}); public-key: {k.status_code}; сотруднику: {forbidden.status_code}")
     c.check(forbidden.status_code == 403, "OPRF только для клиентов")
-    c.check(r.status_code in (200, 422), "прокси не должен падать (422 — если токенизатор не принял тестовую точку)")
+    c.check(r.status_code == 200 and {"evaluated", "proof"} <= set(r.json()), "токенизатор должен вернуть evaluated и proof")
+    c.check(garbage.status_code == 422, f"мусор вместо точки → 422, а не {garbage.status_code}")
     return c.result()
 
 

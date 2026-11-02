@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends
 
 from backend.app import audit
 from backend.app.errors import ApiError
-from backend.app.external_client import BadSignature, ServiceUnavailable
+from backend.app.external_client import BadSignature, RequestRejected, ServiceUnavailable
 from backend.app.schemas import OprfIn
 from backend.app.security.deps import User, get_state, require_roles
 
@@ -30,6 +30,9 @@ async def _tokenizer(state, user: User, call):
         audit.write(state.db, "system", "system", "signature_error", details={"service": "TOKENIZER"})
         state.bus.publish("security", {"kind": "bad_signature", "detail": "Неверная подпись ответа токенизатора"})
         raise ApiError(502, "TOKENIZER_BAD_RESPONSE", "Сервис паспорта вернул неподписанный ответ", retryable=True)
+    except RequestRejected:
+        # токенизатор жив, но значение не является точкой кривой P-256: ошибка в запросе клиента, а не сбой
+        raise ApiError(422, "INVALID_BLINDED", "Не удалось обработать паспорт, попробуйте ещё раз")
     except ServiceUnavailable:
         raise ApiError(503, "TOKENIZER_UNAVAILABLE", "Сервис проверки паспорта недоступен, попробуйте позже",
                        retryable=True)

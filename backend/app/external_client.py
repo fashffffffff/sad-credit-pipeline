@@ -17,6 +17,14 @@ class ServiceUnavailable(Exception):
         self.attempts = attempts
 
 
+class RequestRejected(ServiceUnavailable):
+    """Сервис ответил 4xx: он жив, но отверг сам запрос (например, мусор вместо точки кривой у токенизатора)."""
+
+    def __init__(self, message: str, attempts: int, status: int):
+        super().__init__(message, attempts)
+        self.status = status
+
+
 class BadSignature(Exception):
     """Ответ пришёл, но подпись неверная: ему нельзя верить. Повторять бессмысленно."""
 
@@ -77,7 +85,7 @@ class ExternalClient:
                 continue
             if resp.status_code >= 400:
                 await report("ERROR")
-                raise ServiceUnavailable(f"HTTP {resp.status_code}", attempt)  # наша ошибка, повтор не поможет
+                raise RequestRejected(f"HTTP {resp.status_code}", attempt, resp.status_code)  # наша ошибка, повтор не поможет
             if not verify(self.secret, resp.content, resp.headers.get(SIGNATURE_HEADER),
                           resp.headers.get(TIMESTAMP_HEADER)):
                 await report("ERROR")

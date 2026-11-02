@@ -100,6 +100,8 @@ def make_transport(service: str, secret: str, world: World) -> httpx.MockTranspo
             raise httpx.ReadTimeout("service hangs", request=request)
         if mode == "error":
             return httpx.Response(503)
+        if mode == "reject":  # сервис жив, но отверг запрос (как токенизатор на мусор вместо точки кривой)
+            return httpx.Response(400, json={"error": "bad request"})
         if mode == "flaky_once" and world.calls[counter] == 1:
             return httpx.Response(503)
         if path == "/bki/report" and world.report_down:

@@ -43,6 +43,10 @@ async def test_oprf_input_validation_and_tokenizer_failures(env, client):
     env.world.modes["tokenizer"] = "timeout"
     r = await env.client.post("/api/v1/passport/oprf", json=BODY, headers=client)
     assert r.status_code == 503 and r.json()["retryable"] is True
+    env.world.modes["tokenizer"] = "reject"  # токенизатор отверг значение — это ошибка запроса, а не сбой сервиса
+    env.state.oprf_hits.clear()
+    r = await env.client.post("/api/v1/passport/oprf", json=BODY, headers=client)
+    assert r.status_code == 422 and r.json()["error_code"] == "INVALID_BLINDED"
     env.world.modes["tokenizer"] = "bad_signature"  # подмена ответа токенизатора
     env.state.oprf_hits.clear()
     r = await env.client.post("/api/v1/passport/oprf", json=BODY, headers=client)
