@@ -14,13 +14,13 @@ from backend.app.security.passwords import check_password, hash_password
 
 
 def test_generated_credentials_are_unguessable():
-    """Ожидаемый результат: 4 учётки — по одной на роль; логины с случайным хвостом (не operator/admin);
+    """Ожидаемый результат: 3 учётки — по одной на роль; логины с случайным хвостом (не operator/admin);
     пароли не короче 16 символов и все разные."""
     creds = generate_credentials()
-    assert sorted(c["role"] for c in creds) == ["admin", "auditor", "operator", "risk_manager"]
+    assert sorted(c["role"] for c in creds) == ["admin", "auditor", "underwriter"]
     assert all(len(c["password"]) >= 16 for c in creds)
-    assert len({c["password"] for c in creds}) == 4
-    assert all(c["username"] not in ("operator", "risk", "auditor", "admin") and "." in c["username"] for c in creds)
+    assert len({c["password"] for c in creds}) == 3
+    assert all(c["username"] not in ("operator", "risk", "underwriter", "auditor", "admin") and "." in c["username"] for c in creds)
     assert generate_credentials()[0]["username"] != creds[0]["username"] or generate_credentials()[0]["password"] != creds[0]["password"]
 
 
@@ -89,9 +89,9 @@ async def test_old_demo_passwords_do_not_log_in(tmp_path):
     app = create_app(Settings(database_path=path, bcrypt_rounds=4), credentials=creds)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as client:
         for name in ("operator", "admin"):
-            r = await client.post("/api/auth/login", json={"username": name, "password": name + "123"})
+            r = await client.post("/api/v1/auth/staff/login", json={"username": name, "password": name + "123"})
             assert r.status_code == 401
-        ok = await client.post("/api/auth/login", json={"username": creds[0]["username"], "password": creds[0]["password"]})
+        ok = await client.post("/api/v1/auth/staff/login", json={"username": creds[0]["username"], "password": creds[0]["password"]})
         assert ok.status_code == 200 and ok.json()["role"] == creds[0]["role"]
 
 

@@ -32,12 +32,12 @@ MAX_ISOLATED_SCORE = 0.5  # ниже порога 0.6: изолированна�
 
 def event_to_node(event: Event, idx: int) -> Node:
     """Событие эталона -> узел графа. Отпечатки здесь — просто строки с номерами (реальных данных в эталонах нет)."""
-    fps = {"phone": f"t{event.phone}", "passport": f"p{event.person}", "employer": f"e{event.employer}"}
-    if event.device is not None:  # онлайн-канал: есть устройство клиента
+    fps = {"phone": f"t{event.phone}", "passport": f"p{event.person}"}
+    if event.device is not None:  # приложение прислало id устройства
         fps["device"] = f"d{event.device}"
     return Node(f"ref{idx}", event.ts, fps, amount=event.amount, income=event.income, term=event.term,
                 n_loans=event.n_loans, known_months=event.known_months,
-                channel="online" if event.device is not None else "office")
+                channel="app" if event.device is not None else "nodevice")
 
 
 def vectors_for(events: list[Event]) -> np.ndarray:

@@ -16,25 +16,39 @@ CREATE TABLE IF NOT EXISTS users (
     username TEXT PRIMARY KEY, password_hash TEXT NOT NULL, role TEXT NOT NULL,
     token_version INTEGER NOT NULL DEFAULT 0
 );
+-- таблицы clients, client_identities, auth_challenges создаёт client_auth.init_tables (раздел 6.2 контракта)
 CREATE TABLE IF NOT EXISTS applications (
-    id TEXT PRIMARY KEY, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
-    status TEXT NOT NULL,
-    full_name_masked TEXT NOT NULL, passport_hash TEXT NOT NULL, passport_masked TEXT NOT NULL,
-    phone_masked TEXT NOT NULL,
-    monthly_income INTEGER, employment_months INTEGER, dependents INTEGER, purpose TEXT,
-    loan_amount INTEGER, loan_term_months INTEGER, monthly_payment INTEGER,
-    score INTEGER, total_ms INTEGER,
-    features TEXT, prediction TEXT, reasons TEXT, review TEXT,
-    pdn REAL, bki_loans TEXT, fraud TEXT
+    app_id TEXT PRIMARY KEY, client_id TEXT NOT NULL, passport_hash TEXT NOT NULL,
+    age INTEGER, income REAL, employment TEXT, family TEXT, amount REAL, term INTEGER, product_id TEXT NOT NULL,
+    channel TEXT NOT NULL, client_device_id_hash TEXT, parent_app_id TEXT,
+    status TEXT NOT NULL, created_at TEXT NOT NULL, total_ms INTEGER, idempotency_key TEXT,
+    fraud TEXT, ml_hint TEXT, review TEXT,           -- JSON: антифрод, подсказка модели, ручное решение
+    auto_retries INTEGER NOT NULL DEFAULT 0          -- сколько раз систему перепроверила заявку сама
+);
+CREATE TABLE IF NOT EXISTS decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, app_id TEXT NOT NULL, version INTEGER NOT NULL,
+    decision TEXT NOT NULL, reason TEXT NOT NULL, score INTEGER, dti REAL, monthly_payment REAL,
+    amount_approved REAL, term_approved INTEGER, rate REAL, bki_score INTEGER, bki_delinquency INTEGER,
+    smev_status TEXT, rules_version TEXT, decided_by TEXT, decided_at TEXT, offers_json TEXT,
+    trace_json TEXT, UNIQUE (app_id, version)
+);
+CREATE TABLE IF NOT EXISTS scoring_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, app_id TEXT NOT NULL, decision_version INTEGER NOT NULL,
+    feature TEXT NOT NULL, value TEXT, points INTEGER, max_points INTEGER
+);
+CREATE TABLE IF NOT EXISTS external_requests (
+    request_id TEXT PRIMARY KEY, app_id TEXT, service TEXT NOT NULL, attempt INTEGER NOT NULL,
+    status TEXT NOT NULL, latency_ms INTEGER, result_json TEXT, at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS stages (
     application_id TEXT NOT NULL, stage TEXT NOT NULL, position INTEGER NOT NULL,
     status TEXT NOT NULL, duration_ms INTEGER, attempts INTEGER, detail TEXT,
     PRIMARY KEY (application_id, stage)
 );
+CREATE TABLE IF NOT EXISTS counters (name TEXT PRIMARY KEY, value INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS fraud_nodes (
     app_id TEXT PRIMARY KEY, ts REAL NOT NULL,
-    device TEXT, phone TEXT, employer TEXT, passport TEXT,  -- только HMAC-отпечатки, открытых данных нет
+    device TEXT, phone TEXT, passport TEXT,  -- только HMAC-отпечатки, открытых данных нет
     amount INTEGER, income INTEGER, term INTEGER, n_loans INTEGER, known_months INTEGER,
     score REAL, pattern TEXT, flagged INTEGER, channel TEXT
 );
@@ -57,19 +71,7 @@ class Database:
         self.conn.row_factory = sqlite3.Row
         self.lock = threading.RLock()
         self.conn.executescript(SCHEMA)
-        self._add_missing_columns()
         self.sync_users(credentials or [], bcrypt_rounds)
-
-    def _add_missing_columns(self) -> None:
-        """Старая база (до новых версий) без новых колонок: дописываем их, чтобы не удалять данные."""
-        wanted = {"applications": (("pdn", "REAL"), ("bki_loans", "TEXT"), ("fraud", "TEXT")),
-                  "users": (("token_version", "INTEGER NOT NULL DEFAULT 0"),),
-                  "fraud_nodes": (("channel", "TEXT"),)}
-        for table, columns in wanted.items():
-            have = {r["name"] for r in self.conn.execute(f"PRAGMA table_info({table})")}
-            for col, kind in columns:
-                if col not in have:
-                    self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {kind}")
 
     def sync_users(self, credentials: list[dict], rounds: int) -> None:
         """Приводит таблицу users в соответствие с файлом учёток (его пароли секретные, хранятся вне git).
@@ -115,6 +117,15 @@ class Database:
     def query_one(self, sql: str, params: tuple = ()) -> sqlite3.Row | None:
         with self.lock:
             return self.conn.execute(sql, params).fetchone()
+
+    def next_id(self, prefix: str, width: int = 4) -> str:
+        """Следующий номер по порядку: app_0001, app_0002… Счётчик в БД, поэтому переживает перезапуск."""
+        with self.lock:
+            self.conn.execute("INSERT INTO counters (name, value) VALUES (?, 1) "
+                              "ON CONFLICT(name) DO UPDATE SET value = value + 1", (prefix,))
+            row = self.conn.execute("SELECT value FROM counters WHERE name = ?", (prefix,)).fetchone()
+            self.conn.commit()
+        return f"{prefix}_{row['value']:0{width}d}"
 
     def update(self, table: str, key_col: str, key: str, fields: dict) -> None:
         """UPDATE table SET <fields> WHERE key_col = key. Имена колонок берём только из нашего кода."""

@@ -10,7 +10,7 @@ import os
 log = logging.getLogger("security")
 
 # значения по умолчанию из кода: они публичны (лежат в репозитории)
-KNOWN_DEFAULTS = {"dev-jwt-secret-change-me", "dev-smev-secret", "dev-bki-secret", "dev-pii-pepper"}
+KNOWN_DEFAULTS = {"dev-jwt-secret-change-me", "dev-smev-secret", "dev-bki-secret", "dev-tokenizer-secret", "dev-pii-pepper"}
 MIN_LENGTH_PROD = 32  # HS256 просит ключ не короче хэша (256 бит)
 
 

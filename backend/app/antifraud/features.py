@@ -10,16 +10,15 @@ DAY = 86400.0
 FEATURE_LABELS = {
     "hour_sin": "Время подачи (синус часа)", "hour_cos": "Время подачи (косинус часа)",
     "log_gap_device": "Пауза до соседней заявки с этого устройства",
-    "log_gap_employer": "Пауза до соседней заявки того же работодателя",
+    "n_phone_apps": "Других заявок с этого телефона за неделю",
     "n_dev_1h": "Заявок с этого устройства за час",
     "n_dev_passports": "Разных паспортов на этом устройстве",
     "n_phone_passports": "Разных паспортов на этом телефоне",
-    "n_employer_1h": "Заявок одного работодателя за час",
     "amount_norm": "Сумма кредита", "term_norm": "Срок кредита",
     "log_income_to_amount": "Годовой доход относительно суммы",
     "log_comp_size": "Размер связанной группы", "comp_density": "Плотность связей в группе",
     "log_comp_growth": "Рост группы за час", "log_comp_passports": "Разных паспортов в группе",
-    "is_online": "Заявка из онлайн-канала (с устройства клиента)",
+    "is_online": "Приложение прислало id устройства",
     "n_loans": "Кредитов в истории БКИ", "known_months": "Месяцев известной истории",
     "n_same_passport": "Других заявок с этим паспортом за сутки",
     "income_spread": "Разброс заявленного дохода по этому паспорту",
@@ -41,8 +40,6 @@ def build_vector(graph: FraudGraph, node: Node) -> dict[str, float]:
     hour = (node.ts % DAY) / 3600.0
     dev_all = graph.same(node, "device", DAY)
     gap_dev = min((abs(o.ts - node.ts) for o in dev_all), default=DAY)
-    emp_all = graph.same(node, "employer", DAY)
-    gap_emp = min((abs(o.ts - node.ts) for o in emp_all), default=DAY)
     my_passport = node.fps.get("passport")
     phone_all = graph.same(node, "phone", 7 * DAY)
     same_passport = graph.same(node, "passport", DAY)
@@ -57,16 +54,16 @@ def build_vector(graph: FraudGraph, node: Node) -> dict[str, float]:
 
     return {
         "hour_sin": math.sin(2 * math.pi * hour / 24), "hour_cos": math.cos(2 * math.pi * hour / 24),
-        "log_gap_device": math.log1p(gap_dev), "log_gap_employer": math.log1p(gap_emp),
+        "log_gap_device": math.log1p(gap_dev),
         "n_dev_1h": sum(1 for o in dev_all if abs(o.ts - node.ts) <= 3600),
         "n_dev_passports": len({o.fps.get("passport") for o in dev_all if o.fps.get("passport") != my_passport}),
         "n_phone_passports": len({o.fps.get("passport") for o in phone_all if o.fps.get("passport") != my_passport}),
-        "n_employer_1h": sum(1 for o in emp_all if abs(o.ts - node.ts) <= 3600),
+        "n_phone_apps": len(phone_all),
         "amount_norm": node.amount / 5_000_000, "term_norm": node.term / 84,
         "log_income_to_amount": math.log(min(max(node.income * 12 / max(node.amount, 1), 0.05), 20)),
         "log_comp_size": math.log1p(size), "comp_density": density,
         "log_comp_growth": math.log1p(growth), "log_comp_passports": math.log1p(len(passports)),
-        "is_online": 1.0 if node.channel == "online" else 0.0,
+        "is_online": 1.0 if node.channel == "app" else 0.0,
         "n_loans": node.n_loans, "known_months": node.known_months,
         "n_same_passport": len(same_passport),
         "income_spread": math.log(max(incomes) / max(min(incomes), 1)) if len(incomes) > 1 else 0.0,
