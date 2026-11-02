@@ -28,3 +28,6 @@ docs/SECURITY_AUDIT.md
 docs/*_output.txt
 frontend/3d/
 .claude/
+
+# собранные Go-сервисы
+bin/
