@@ -4,8 +4,8 @@
   import type { FraudGraph, LinkKind } from '../lib/types'
   let { graph, onopen }: { graph: FraudGraph; onopen?: (id: string) => void } = $props()
 
-  const KIND: Record<LinkKind, string> = { phone: 'var(--c-accent)', device: 'var(--warn-text)', employer: '#12958e', passport: 'var(--text)' }
-  const FILL = { approved: 'var(--c-ok)', manual_review: 'var(--c-warn)', rejected: 'var(--c-bad)', processing: 'var(--c-accent)', received: 'var(--c-accent)' }
+  const KIND: Record<LinkKind, string> = { phone: 'var(--c-accent)', device: 'var(--warn-text)', passport: 'var(--text)' }
+  const FILL = { APPROVED: 'var(--c-ok)', MANUAL_REVIEW: 'var(--c-warn)', REFUSED: 'var(--c-bad)', NEED_MORE_DATA: 'var(--c-muted)', PROCESSING: 'var(--c-accent)' }
 
   const view = $derived.by(() => {
     const sim = new Sim(2)

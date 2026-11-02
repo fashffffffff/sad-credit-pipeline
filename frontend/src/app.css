@@ -134,10 +134,20 @@ select.input { appearance: none; background-image: linear-gradient(45deg, transp
   font-size: 13px; font-weight: 600; white-space: nowrap;
 }
 .pill::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
-.pill.approved { color: var(--ok-text); background: var(--ok-soft); }
-.pill.rejected { color: var(--bad-text); background: var(--bad-soft); }
-.pill.manual_review { color: var(--warn-text); background: var(--warn-soft); }
-.pill.processing, .pill.received { color: var(--c-accent); background: var(--accent-soft); }
+.pill.ok { color: var(--ok-text); background: var(--ok-soft); }
+.pill.bad { color: var(--bad-text); background: var(--bad-soft); }
+.pill.warn { color: var(--warn-text); background: var(--warn-soft); }
+.pill.accent { color: var(--c-accent); background: var(--accent-soft); }
+
+/* ---- круглая кнопка-иконка (тема, выход) ---- */
+.icon-btn { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 12px; border: 1px solid var(--line-strong); background: var(--bg-panel); cursor: pointer; transition: border-color 0.15s; flex: none; }
+.icon-btn:hover { border-color: var(--text); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+a { color: var(--c-accent); }
+a.btn { text-decoration: none; }
+a.btn.primary { color: var(--on-accent); }
+.skip { position: absolute; left: 8px; top: -50px; z-index: 100; background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 10px; }
+.skip:focus { top: 8px; }
 
 /* ---- чипы ---- */
 .chip {

@@ -16,7 +16,9 @@
     activeStage?: Stage | null; live?: boolean; verdict?: Verdict | null; onstation?: (p: { x: number; y: number } | null) => void; stageStates?: Partial<Record<Stage, string>>; currentStage?: Stage | 'validation' | null; onhover?: (h: StageHover | null) => void; onready?: () => void
   }
   // avoid — селектор элемента (карточка входа): композиция вписывается в область слева от него
-  let { fullscreen = false, activeStage = null, avoid = '', live = false, stageStates = {}, currentStage = null, verdict = null }: {
+  let { fullscreen = false, activeStage = null, avoid = '', live = false, stageStates = {}, currentStage = null, verdict = null, fullCy = -0.3, fullFitH = 0.66 }: {
+    /** положение и высота композиции в полноэкранном режиме (режим зала поднимает сцену над списком заявок) */
+    fullCy?: number; fullFitH?: number
     verdict?: Verdict | null
     fullscreen?: boolean; activeStage?: Stage | null; avoid?: string
     live?: boolean; stageStates?: Partial<Record<Stage, string>>; currentStage?: Stage | 'validation' | null
@@ -72,7 +74,7 @@
    <div class="cv" class:show={ready}>
     {#if fullscreen}
       <Canvas dark={theme.mode === 'dark'} {visible} {activeStage} onhover={(h) => (tip = h)} onready={() => (ready = true)}
-        cx={fcx} cy={-0.3} fitW={ffitW} fitH={0.66} />
+        cx={fcx} cy={fullCy} fitW={ffitW} fitH={fullFitH} />
     {:else}
       <Canvas dark={theme.mode === 'dark'} {visible} {activeStage} {live} {stageStates} {currentStage} {verdict} onstation={(p) => (badgePos = p)} onhover={(h) => (tip = h)} onready={() => (ready = true)} cx={0} cy={0} fitW={live ? 1.2 : 0.94} fitH={live ? 1.2 : 0.94} />
     {/if}

@@ -1,6 +1,6 @@
 <script lang="ts">
   // 3D-граф антифрода в «глиняном» стиле: заявки — шарики (цвет по статусу), связи — нити по типу (телефон, устройство,
-  // работодатель, паспорт). Подозрительный кластер краснеет и пульсирует. Раскладку считает свой маленький force-layout (lib/forceLayout).
+  // паспорт). Подозрительный кластер краснеет и пульсирует. Раскладку считает свой маленький force-layout (lib/forceLayout).
   // Объекты Three создаются вручную (а не тегами), потому что позиции меняются каждый кадр: так заметно быстрее.
   import { T, useTask, useThrelte } from '@threlte/core'
   import { OrbitControls } from '@threlte/extras'
@@ -25,10 +25,10 @@
   let cam = $state<PerspectiveCamera>()
 
   const STATUS = {
-    approved: '#3fae7c', manual_review: '#e3a008', rejected: '#e5484d', processing: '#6c78ff', received: '#6c78ff',
+    APPROVED: '#3fae7c', MANUAL_REVIEW: '#e3a008', REFUSED: '#e5484d', NEED_MORE_DATA: '#8d9097', PROCESSING: '#6c78ff',
   } as const
   const KIND: Record<LinkKind, [string, string]> = { // [светлая, тёмная]
-    phone: ['#2f3bff', '#8b94ff'], device: ['#c98a00', '#f2b632'], employer: ['#12958e', '#3fd1c8'], passport: ['#15171a', '#f2f0ea'],
+    phone: ['#2f3bff', '#8b94ff'], device: ['#c98a00', '#f2b632'], passport: ['#15171a', '#f2f0ea'],
   }
   const sim = new Sim(3)
   const group = new Group()
@@ -97,7 +97,7 @@
         const k = 0.5 + 0.5 * Math.sin(t * 5)
         m.mesh.material = hotMaterial
         hotMaterial.emissive.copy(hot).multiplyScalar(0.25 + 0.55 * k)
-      } else if (mat === hotMaterial) m.mesh.material = material('manual_review')
+      } else if (mat === hotMaterial) m.mesh.material = material('MANUAL_REVIEW')
     }
     // нити
     const pos = lineGeo.getAttribute('position') as BufferAttribute | undefined
