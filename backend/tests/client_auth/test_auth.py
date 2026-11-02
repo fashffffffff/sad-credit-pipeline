@@ -103,7 +103,7 @@ def test_challenge_expires_after_5_minutes(client, clock):
 
 def test_invalid_phone_and_unknown_challenge(client):
     r = client.post(f"{A}/phone/start", json={"phone": "123", "channel": "demo"})
-    assert r.status_code == 422 and r.json()["error"] == "invalid_phone"
+    assert r.status_code == 422 and r.json()["error_code"] == "INVALID_PHONE"
     assert client.get(f"{A}/phone/nope").json() == {"status": "expired"}
     assert client.post(f"{A}/phone/nope/code", json={"code": "123456"}).status_code == 400
 
@@ -370,7 +370,7 @@ def test_vk_success_and_state_long_enough(client, net, oauth_env):
 def test_oauth_forged_and_replayed_state(client, net, oauth_env, db):
     net.handler = provider_handler()
     r = client.post(f"{A}/oauth/yandex/callback", json={"code": "c", "state": "forged"})
-    assert r.status_code == 400 and r.json()["error"] == "invalid_state"
+    assert r.status_code == 400 and r.json()["error_code"] == "INVALID_STATE"
     _, state = oauth_start_state(client, "yandex")
     assert client.post(f"{A}/oauth/yandex/callback", json={"code": "c", "state": state}).status_code == 200
     assert client.post(f"{A}/oauth/yandex/callback", json={"code": "c", "state": state}).status_code == 400
@@ -402,7 +402,7 @@ def test_oauth_provider_error(client, net, oauth_env):
     net.handler = lambda req: httpx.Response(400, json={"error": "invalid_grant"})
     _, state = oauth_start_state(client, "yandex")
     r = client.post(f"{A}/oauth/yandex/callback", json={"code": "bad", "state": state})
-    assert r.status_code == 400 and r.json()["error"] == "provider_error"
+    assert r.status_code == 400 and r.json()["error_code"] == "PROVIDER_ERROR"
 
 
 def test_oauth_disabled_when_not_configured(client):

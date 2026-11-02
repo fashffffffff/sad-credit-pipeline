@@ -97,12 +97,12 @@ async def callback(db, provider: str, code: str, state: str, device_id: str | No
     verifier = consume_state(db, provider, state)
     if verifier is None:
         store.login_failed(db, provider, "bad_state")
-        raise ApiError(400, "invalid_state", "Ссылка входа устарела или недействительна — начните заново")
+        raise ApiError(400, "INVALID_STATE", "Ссылка входа устарела или недействительна — начните заново")
     try:
         uid, phone = await fetch_identity(provider, code, verifier, device_id)
     except Exception as exc:  # плохой код, сеть, неожиданный ответ — одна ошибка наружу
         log.warning("%s: обмен кода не удался: %s", provider, type(exc).__name__)
         store.login_failed(db, provider, "provider_error")
-        raise ApiError(400, "provider_error", "Не удалось войти через сервис — попробуйте ещё раз")
+        raise ApiError(400, "PROVIDER_ERROR", "Не удалось войти через сервис — попробуйте ещё раз")
     client_id = store.client_for_oauth(db, provider, uid, phone)
     return store.login_result(db, client_id, provider, **({"phone_missing": True} if phone is None else {}))

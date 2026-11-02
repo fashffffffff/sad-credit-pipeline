@@ -82,22 +82,19 @@ def client_for_oauth(db, provider: str, uid: str, phone: str | None) -> str:
 
 
 def login_result(db, client_id: str, channel: str, **extra) -> dict:
-    """Выдаёт JWT клиента и пишет `login` в аудит (без телефона: только client_id и маска)."""
+    """Выдаёт JWT клиента и пишет `login` в аудит (без телефона: только client_id)."""
     row = db.query_one("SELECT phone_masked, token_version FROM clients WHERE client_id = ?", (client_id,))
     token = create_token(config.jwt_secret(), username=client_id, role="client",
                          ttl_minutes=config.TOKEN_TTL_MINUTES, token_version=row["token_version"])
-    audit.write(db, client_id, "client", "login", "client", client_id,
-                {"channel": channel, "phone_masked": row["phone_masked"]})
+    audit.write(db, client_id, "client", "login", details={"channel": channel})
     return {"access_token": token, "client_id": client_id, "phone_masked": row["phone_masked"],
             "role": "client", **extra}
 
 
 def login_failed(db, channel: str, reason: str, masked: str | None = None, client_id: str | None = None) -> None:
-    details = {"channel": channel, "reason": reason}
-    if masked:
-        details["phone_masked"] = masked
+    # телефон (даже маску) в аудит не пишем — в журнале нет ПДн
     audit.write(db, client_id or "-", "client" if client_id else "-", "login_failed",
-                "client" if client_id else None, client_id, details)
+                details={"channel": channel, "reason": reason})
 
 
 # ---------- challenge'и ----------
@@ -107,13 +104,13 @@ def check_rate_limits(db, ip: str, p_hash: str | None) -> None:
         n = db.query_one("SELECT COUNT(*) AS n FROM auth_challenges WHERE phone_hash = ? AND created_at > ?",
                          (p_hash, now - config.PHONE_START_WINDOW))["n"]
         if n >= config.PHONE_START_LIMIT:
-            raise ApiError(429, "too_many_requests", "Слишком много попыток для этого номера, подождите 10 минут")
+            raise ApiError(429, "TOO_MANY_REQUESTS", "Слишком много попыток для этого номера, подождите 10 минут")
     n = db.query_one("SELECT COUNT(*) AS n FROM auth_challenges WHERE ip = ? AND created_at > ?",
                      (ip, now - config.IP_START_WINDOW))["n"]
     n += db.query_one("SELECT COUNT(*) AS n FROM oauth_states WHERE ip = ? AND created_at > ?",
                       (ip, now - config.IP_START_WINDOW))["n"]
     if n >= config.IP_START_LIMIT:
-        raise ApiError(429, "too_many_requests", "Слишком много попыток с этого адреса, подождите час")
+        raise ApiError(429, "TOO_MANY_REQUESTS", "Слишком много попыток с этого адреса, подождите час")
 
 
 def create_challenge(db, channel: str, phone: str, ip: str, **fields) -> dict:

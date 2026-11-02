@@ -46,10 +46,10 @@ async def providers():
 async def phone_start(body: StartIn, request: Request):
     db, ip = _db(request), _ip(request)
     if body.channel not in ("telegram", "call", "demo") or not config.providers().get(body.channel):
-        raise ApiError(400, "channel_unavailable", "Этот способ входа не включён")
+        raise ApiError(400, "CHANNEL_UNAVAILABLE", "Этот способ входа не включён")
     phone = normalize_phone(body.phone)
     if phone is None:
-        raise ApiError(422, "invalid_phone", "Введите мобильный номер в формате +7 9XX XXX-XX-XX")
+        raise ApiError(422, "INVALID_PHONE", "Введите мобильный номер в формате +7 9XX XXX-XX-XX")
     store.check_rate_limits(db, ip, phone_hash(phone))
     if body.channel == "telegram":
         nonce = secrets.token_urlsafe(12)
@@ -61,8 +61,8 @@ async def phone_start(body: StartIn, request: Request):
             check_id, call_to = await smsru.add(phone, ip)
         except smsru.CallError as exc:
             if exc.invalid_phone:
-                raise ApiError(422, "invalid_phone", "Номер не принят оператором")
-            raise ApiError(502, "channel_error", "Звонок временно недоступен, попробуйте другой способ")
+                raise ApiError(422, "INVALID_PHONE", "Номер не принят оператором")
+            raise ApiError(502, "CHANNEL_ERROR", "Звонок временно недоступен, попробуйте другой способ")
         ch = store.create_challenge(db, "call", phone, ip, check_id=check_id)
         return {"challenge_id": ch["challenge_id"], "call_to": call_to, "expires_in": config.CHALLENGE_TTL}
     code = f"{secrets.randbelow(10**6):06d}"
@@ -103,7 +103,7 @@ def _deliver(db, row) -> dict:
 @router.post("/phone/{challenge_id}/code")
 async def phone_code(challenge_id: str, body: CodeIn, request: Request):
     db = _db(request)
-    bad = ApiError(400, "invalid_code", "Неверный код или он истёк")
+    bad = ApiError(400, "INVALID_CODE", "Неверный код или он истёк")
     row = store.get_challenge(db, challenge_id)
     if row is None or row["channel"] != "demo" or row["status"] != "pending":
         raise bad
@@ -123,12 +123,12 @@ async def phone_code(challenge_id: str, body: CodeIn, request: Request):
 @router.get("/oauth/{provider}/start")
 async def oauth_start(provider: str, request: Request):
     if provider not in ("yandex", "vk") or not config.providers().get(provider):
-        raise ApiError(400, "channel_unavailable", "Этот способ входа не включён")
+        raise ApiError(400, "CHANNEL_UNAVAILABLE", "Этот способ входа не включён")
     return oauth.start(_db(request), provider, _ip(request))
 
 
 @router.post("/oauth/{provider}/callback")
 async def oauth_callback(provider: str, body: CallbackIn, request: Request):
     if provider not in ("yandex", "vk") or not config.providers().get(provider):
-        raise ApiError(400, "channel_unavailable", "Этот способ входа не включён")
+        raise ApiError(400, "CHANNEL_UNAVAILABLE", "Этот способ входа не включён")
     return await oauth.callback(_db(request), provider, body.code, body.state, body.device_id)
