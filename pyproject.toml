@@ -20,6 +20,9 @@ dependencies = [
     "shap>=0.46",
     "joblib>=1.4",
     "openml>=0.15",
+    "cryptography>=43",
+    "fpdf2>=2.8",
+    "segno>=1.6",
 ]
 
 [dependency-groups]
