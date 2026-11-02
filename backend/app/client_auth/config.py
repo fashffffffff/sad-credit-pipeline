@@ -16,8 +16,10 @@ CHALLENGE_TTL = 300        # challenge живёт 5 минут
 STATE_TTL = 600            # OAuth state живёт 10 минут
 PHONE_START_LIMIT = 3      # стартов на один номер...
 PHONE_START_WINDOW = 600   # ...за 10 минут
-IP_START_LIMIT = 10        # стартов (телефон + OAuth) с одного IP...
-IP_START_WINDOW = 3600     # ...за час
+# Стартов (телефон + OAuth) с одного IP в час. Не делать маленьким: на защите всё жюри сидит в одной Wi-Fi
+# за одним внешним IP. От перебора номеров защищает лимит на номер, а этот — от ботов с одного адреса.
+IP_START_LIMIT = int(os.environ.get("AUTH_IP_LIMIT_PER_HOUR", "60"))
+IP_START_WINDOW = 3600     # окно для IP_START_LIMIT
 MAX_BAD_CODES = 5          # неверных демо-кодов до сгорания challenge
 TOKEN_TTL_MINUTES = 60
 

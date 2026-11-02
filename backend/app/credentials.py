@@ -47,6 +47,29 @@ def _markdown(credentials: list[dict]) -> str:
             f"| Логин | Роль | Пароль |\n|---|---|---|\n{rows}\n")
 
 
+# Роли версии 5, которых больше нет: оператор (заявку теперь подаёт сам клиент) и риск-менеджер (стал андеррайтером)
+RETIRED_ROLES = {"operator", "risk_manager"}
+
+
+def _migrate(file: Path, credentials: list[dict]) -> list[dict]:
+    """Файл от прошлой версии: убираем учётки удалённых ролей и создаём учётки для новых ролей.
+
+    Пароли оставшихся учёток не меняются. Файл перезаписывается только если что-то изменилось.
+    """
+    kept = [c for c in credentials if c["role"] not in RETIRED_ROLES]
+    have = {c["role"] for c in kept}
+    added = [{"username": f"{prefix}.{secrets.token_hex(3)}", "role": role, "password": secrets.token_urlsafe(18)}
+             for role, prefix in ROLE_PREFIXES if role not in have]
+    if len(kept) == len(credentials) and not added:
+        return credentials
+    result = kept + added
+    _write_private(file, json.dumps(result, ensure_ascii=False, indent=2) + "\n")
+    _write_private(file.with_suffix(".md"), _markdown(result))
+    log.warning("Файл учёток %s обновлён под новые роли: убрано %d, добавлено %d (%s). Пароли в лог не пишутся.",
+                file, len(credentials) - len(kept), len(added), ", ".join(c["role"] for c in added) or "—")
+    return result
+
+
 def load_or_create_credentials(path: str) -> list[dict]:
     file = Path(path)
     if file.exists():
@@ -57,9 +80,10 @@ def load_or_create_credentials(path: str) -> list[dict]:
         for c in credentials:
             if not {"username", "role", "password"} <= set(c):
                 raise RuntimeError(f"{path}: у каждой учётки должны быть username, role, password")
-            if c["role"] not in dict(ROLE_PREFIXES):  # опечатка в роли дала бы учётку, которая ничего не может
+            if c["role"] not in dict(ROLE_PREFIXES) and c["role"] not in RETIRED_ROLES:
+                # опечатка в роли дала бы учётку, которая ничего не может
                 raise RuntimeError(f"{path}: неизвестная роль {c['role']!r} у {c['username']!r}")
-        return credentials
+        return _migrate(file, credentials)
     file.parent.mkdir(parents=True, exist_ok=True, mode=0o700)  # папка с паролями — только владельцу
     credentials = generate_credentials()
     _write_private(file, json.dumps(credentials, ensure_ascii=False, indent=2) + "\n")

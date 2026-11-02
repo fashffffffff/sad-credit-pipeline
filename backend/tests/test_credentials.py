@@ -132,3 +132,19 @@ def test_secrets_dir_is_git_ignored():
     """Ожидаемый результат: папка secrets/ перечислена в .gitignore."""
     from pathlib import Path
     assert "secrets/" in Path(".gitignore").read_text().split()
+
+
+def test_old_v5_file_is_migrated_without_touching_kept_passwords(tmp_path):
+    import json
+    from backend.app.credentials import load_or_create_credentials
+    path = tmp_path / "credentials.local.json"
+    old = [{"username": "op.aaaaaa", "role": "operator", "password": "p1" * 12},
+           {"username": "risk.bbbbbb", "role": "risk_manager", "password": "p2" * 12},
+           {"username": "audit.cccccc", "role": "auditor", "password": "p3" * 12},
+           {"username": "admin.dddddd", "role": "admin", "password": "p4" * 12}]
+    path.write_text(json.dumps(old))
+    creds = load_or_create_credentials(str(path))
+    roles = {c["role"]: c for c in creds}
+    assert set(roles) == {"underwriter", "auditor", "admin"}
+    assert roles["auditor"]["password"] == "p3" * 12 and roles["admin"]["password"] == "p4" * 12
+    assert json.loads(path.read_text()) == creds and (tmp_path / "credentials.local.md").exists()

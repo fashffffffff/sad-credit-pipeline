@@ -116,7 +116,9 @@ def test_phone_start_limit_3_per_10_minutes(client, clock):
     assert client.post(f"{A}/phone/start", json={"phone": GOOD_PHONE, "channel": "demo"}).status_code == 200
 
 
-def test_ip_limit_10_per_hour(client, clock):
+def test_ip_limit_per_hour(client, clock, monkeypatch):
+    from backend.app.client_auth import config
+    monkeypatch.setattr(config, "IP_START_LIMIT", 10)
     for i in range(10):
         r = client.post(f"{A}/phone/start", json={"phone": f"+7 900 000 00 {i:02d}", "channel": "demo"})
         assert r.status_code == 200

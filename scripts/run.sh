@@ -92,7 +92,7 @@ done
 
 echo -n "Жду backend"
 for _ in $(seq 1 90); do
-  if curl -sf http://127.0.0.1:$BACKEND_PORT/api/health >/dev/null 2>&1; then ready=1; break; fi
+  if curl -sf http://127.0.0.1:$BACKEND_PORT/health >/dev/null 2>&1; then ready=1; break; fi
   echo -n "."; sleep 1
 done
 echo
@@ -103,13 +103,13 @@ fi
 cat <<TABLE
 
 Приложение (UI)  http://localhost:$FRONT_PORT
-API backend      http://localhost:$BACKEND_PORT/api/health
+API backend      http://localhost:$BACKEND_PORT/api/v1/health
 Эмулятор СМЭВ    http://localhost:$SMEV_PORT/health   (Go)
 Эмулятор БКИ     http://localhost:$BKI_PORT/health   (Go)
 Токенизатор      http://localhost:$TOKENIZER_PORT/health   (Go, OPRF; ключ secrets/oprf.key)
 
-Данные для входа: secrets/credentials.local.md (создаётся при первом запуске, в git не попадает)
-Магические паспорта: 0000 000001 … 000005 (см. README)
+Клиент: вход по телефону (Яндекс ID / звонок / демо-код — что настроено в .env)
+Сотрудники: secrets/credentials.local.md (создаётся при первом запуске, в git не попадает)
 Логи: logs/*.log      Остановка: Ctrl+C
 TABLE
 wait

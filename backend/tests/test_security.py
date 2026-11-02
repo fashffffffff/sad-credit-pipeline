@@ -395,7 +395,7 @@ def test_credentials_file_private_tightened_and_validated(tmp_path):
     os.chmod(path, 0o644)
     assert load_or_create_credentials(str(path)) == creds and stat.S_IMODE(os.stat(path).st_mode) == 0o600
     assert credentials_by_role(str(path))["underwriter"]["username"].startswith("uw.")
-    path.write_text(json.dumps([{"username": "a", "role": "operator", "password": "x"}]))
+    path.write_text(json.dumps([{"username": "a", "role": "superuser", "password": "x"}]))
     with pytest.raises(RuntimeError, match="неизвестная роль"):
         load_or_create_credentials(str(path))
 
