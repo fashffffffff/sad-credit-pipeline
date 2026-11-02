@@ -1,29 +1,32 @@
 <script lang="ts">
-  // «Аудит»: журнал, где каждая запись хранит хэш предыдущей. Подделал одну — цепочка ломается.
-  import { api } from '../lib/api'
-  import type { AuditRecord, AuditVerify } from '../lib/types'
-  import { auditAction, errText, fmtDateTime } from '../lib/format'
+  // «Журнал аудита»: каждая запись хранит хэш предыдущей. Подделал одну — цепочка ломается, и «Проверить цепочку» показывает, где именно.
+  // Только чтение (роль «аудитор»). Формат записей — как в кейсе: event_id, app_id, action, decision, reason, score, dti, actor, at.
+  import { api } from '../../lib/api'
+  import type { AuditRecord, AuditVerify } from '../../lib/types'
+  import { auditAction, errText, fmtDateTime, fmtDti } from '../../lib/format'
 
   let rows = $state<AuditRecord[]>([])
+  let appFilter = $state('')
   let error = $state('')
   let result = $state<AuditVerify | null>(null)
   let walked = $state(0)       // сколько звеньев уже «проверено» анимацией
   let running = $state(false)
 
   async function load() {
-    try { rows = await api.audit(100); error = '' } catch (e) { error = errText(e) }
+    try { rows = await api.audit(300, appFilter.trim() || undefined); error = '' } catch (e) { error = errText(e) }
   }
-  $effect(() => { load() })
+  $effect(() => { void appFilter; load() })
 
-  // для анимации идём от старых записей к новым
-  const chain = $derived([...rows].sort((a, b) => a.id - b.id))
-  const brokenIdx = $derived(result?.broken_at != null ? chain.findIndex((r) => r.id === result!.broken_at) : -1)
+  // для анимации идём от старых записей к новым (event_id растёт со временем)
+  const chain = $derived([...rows].sort((a, b) => a.event_id.localeCompare(b.event_id)))
+  const brokenIdx = $derived(result?.broken_at != null ? chain.findIndex((r) => r.event_id === result!.broken_at) : -1)
 
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
   async function verify() {
     running = true; result = null; walked = 0; error = ''
     try {
+      appFilter = ''
       await load()
       const res = await api.verifyAudit()
       const end = res.ok ? chain.length : brokenIdx >= 0 ? brokenIdx : Math.min(res.checked, chain.length)
@@ -34,35 +37,23 @@
     } catch (e) { error = errText(e) } finally { running = false }
   }
 
-  async function tamper() {
-    const target = chain[Math.floor(chain.length / 2)]
-    api.tamperAudit?.(target.id)
-    result = null; walked = 0
-    await load()
-  }
-
   const short = (h: string) => h.slice(0, 6) + '…' + h.slice(-4)
-  const detailText = (d: unknown) => (typeof d === 'string' ? d : JSON.stringify(d))
   const cellState = (i: number) => (brokenIdx === i && result ? 'broken' : i < walked ? 'ok' : 'idle')
 </script>
 
 <div class="page">
-  <div class="page-title"><h1>Журнал</h1><p>Каждое действие записано. У каждой записи есть отпечаток (хэш), зависящий от предыдущей, поэтому подделку видно.</p></div>
+  <div class="page-title"><h1>Журнал аудита</h1><p>Каждое действие записано. У каждой записи есть отпечаток (хэш), зависящий от предыдущей, поэтому подделку видно. Журнал только для чтения: записи нельзя править и удалять.</p></div>
 
   <section class="panel verify">
     <div class="vhead">
-      <div>
-        <h2>Целостность цепочки</h2>
-        
-      </div>
+      <div><h2>Целостность цепочки</h2><p class="dim small">Проверка пересчитывает хэш каждой записи и сверяет со ссылкой на предыдущую.</p></div>
       <div class="vbtn">
-        {#if api.isMock && api.tamperAudit}<button class="btn ghost sm" onclick={tamper} disabled={running}>Демо: подделать запись</button>{/if}
         <button class="btn primary big" onclick={verify} disabled={running || !rows.length}>{running ? 'Проверяем…' : 'Проверить целостность цепочки'}</button>
       </div>
     </div>
 
     <div class="strip" aria-hidden="true">
-      {#each chain as r, i (r.id)}
+      {#each chain as r, i (r.event_id)}
         <i class={cellState(i)} class:head={running && i === walked - 1}></i>
         {#if i < chain.length - 1}<b class:ok={i + 1 < walked && !(result && brokenIdx >= 0 && i + 1 >= brokenIdx)}></b>{/if}
       {/each}
@@ -73,7 +64,7 @@
         {#if result.ok}
           <span class="mark">✓</span><div><b>Цепочка цела</b><div class="small">Проверено записей: {result.checked}. Подделок нет.</div></div>
         {:else}
-          <span class="mark">✕</span><div><b>Подделка в записи #{result.broken_at}</b><div class="small">Хэш не сошёлся — запись изменили после того, как её записали.</div></div>
+          <span class="mark">✕</span><div><b>Подделка в записи {result.broken_at}</b><div class="small">Хэш не сошёлся — запись изменили после того, как её записали.</div></div>
         {/if}
       </div>
     {/if}
@@ -82,20 +73,23 @@
   {#if error}<div class="err">{error}</div>{/if}
 
   <section class="panel">
+    <div class="filter"><input class="input" placeholder="Фильтр по номеру заявки, например app_0003" bind:value={appFilter} aria-label="Фильтр по заявке" /></div>
     <div class="table-wrap"><table class="tbl">
-      <thead><tr><th class="num">#</th><th>Время</th><th>Кто</th><th>Действие</th><th>Детали</th><th>Хэш</th><th>Предыдущий</th></tr></thead>
+      <thead><tr><th>Событие</th><th>Время</th><th>Кто</th><th>Действие</th><th>Заявка</th><th>Решение</th><th class="num">Балл</th><th class="num">DTI</th><th>Хэш</th><th>Предыдущий</th></tr></thead>
       <tbody>
-        {#each rows as r (r.id)}
-          <tr class:broken={result?.broken_at === r.id}>
-            <td class="num">{r.id}</td><td class="mono dim nw">{fmtDateTime(r.ts)}</td><td class="nw">{r.actor}{#if r.role !== r.actor}<span class="dim small"> ({r.role})</span>{/if}</td>
-            <td title={r.action}><div class="act"><b>{auditAction(r.action)}</b><span class="code dim small">{r.action}{r.entity_id ? ` · ${r.entity} ${r.entity_id}` : ''}</span></div></td>
-            <td class="det dim small" title={detailText(r.details)}>{detailText(r.details)}</td>
+        {#each rows as r (r.event_id)}
+          <tr class:broken={result?.broken_at === r.event_id}>
+            <td class="code">{r.event_id}</td><td class="mono dim nw">{fmtDateTime(r.at)}</td><td class="nw">{r.actor}</td>
+            <td title={r.action}><div class="act"><b>{auditAction(r.action)}</b><span class="code dim small">{r.action}</span></div></td>
+            <td class="code">{r.app_id ?? '—'}</td>
+            <td class="small">{r.decision ?? '—'}{#if r.reason}<span class="code dim"> · {r.reason}</span>{/if}</td>
+            <td class="num">{r.score ?? '—'}</td><td class="num">{fmtDti(r.dti)}</td>
             <td class="code hash">{short(r.hash)}</td><td class="code hash dim">{short(r.prev_hash)}</td>
           </tr>
         {/each}
       </tbody>
     </table></div>
-    {#if !rows.length}<p class="empty">Журнал пока пуст</p>{/if}
+    {#if !rows.length}<p class="empty">Записей нет</p>{/if}
   </section>
 </div>
 
@@ -120,7 +114,7 @@
   tr.broken { background: var(--bad-soft); }
   .act { display: flex; flex-direction: column; gap: 1px; min-width: 150px; }
   .act b { font-weight: 600; }
-  .det { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .filter { margin-bottom: 12px; max-width: 360px; }
   .nw { white-space: nowrap; }
   .hash { font-size: 13px; white-space: nowrap; }
   .err { color: var(--c-bad); margin-bottom: 12px; }

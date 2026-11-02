@@ -90,7 +90,6 @@
   <ul class="legend">
     <li><i style:background="var(--c-accent)"></i>телефон</li>
     <li><i style:background="var(--warn-text)"></i>устройство</li>
-    <li><i style:background="#12958e"></i>работодатель</li>
     <li><i style:background="var(--text)"></i>паспорт</li>
   </ul>
 </div>

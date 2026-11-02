@@ -35,7 +35,7 @@ class Events {
     const ts = Date.now()
     this.feed = [{ key: ++this.n, ts, event: e }, ...this.feed].slice(0, 80)
     if (e.type === 'stage') {
-      const id = e.data.application_id
+      const id = e.data.app_id
       this.stages[id] = { ...this.stages[id], [e.data.stage]: e.data }
       // не копим состояние бесконечно: храним последние ~150 заявок
       const keys = Object.keys(this.stages)

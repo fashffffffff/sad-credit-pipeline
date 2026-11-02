@@ -1,40 +1,41 @@
-// Крошечный роутер на location.hash: #/apps/app_123 → страница «apps», параметр «app_123».
-// Хэш нужен, чтобы F5 не выкидывал на другой экран и работало без настройки сервера.
-import { auth, HOME, type Page } from './auth.svelte'
-
-const PAGES: Page[] = ['new', 'myapps', 'apps', 'model', 'monitor', 'lab', 'audit']
-// старые адреса (закладки, ссылки) перенаправляем на новые экраны
-const ALIASES: Record<string, Page> = { whatif: 'apps', review: 'apps', flow: 'monitor', chaos: 'lab' }
-
-function parse() {
-  const [, p, param] = location.hash.split('/')
-  const page = PAGES.includes(p as Page) ? (p as Page) : (ALIASES[p] ?? null)
-  return { page, param: param ?? '' }
-}
-
+// Крошечный роутер на History API: настоящие адреса (/apps/app_0001, /staff/queue, /auth/callback/yandex, /verify#...).
+// Ссылки <a href="/..."> перехватываются и не перезагружают страницу. Сервер должен отдавать index.html на любой путь (nginx: try_files).
 class Router {
-  page = $state<Page>('new')
-  param = $state('')
+  path = $state(location.pathname)
+  search = $state(location.search)
 
   constructor() {
-    const sync = () => {
-      const r = parse()
-      this.page = r.page ?? (auth.role ? HOME[auth.role] : 'new')
-      this.param = r.param
-    }
-    window.addEventListener('hashchange', sync)
-    sync()
+    addEventListener('popstate', () => this.sync())
+    // клики по обычным ссылкам внутри приложения — без перезагрузки
+    addEventListener('click', (e) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+      const a = (e.target as Element | null)?.closest?.('a')
+      if (!a || a.target || a.hasAttribute('download') || a.origin !== location.origin) return
+      e.preventDefault()
+      this.go(a.pathname + a.search + a.hash)
+    })
   }
+  private sync() { this.path = location.pathname; this.search = location.search }
 
-  go(page: Page, param = '') {
-    location.hash = `#/${page}${param ? '/' + param : ''}`
+  go(url: string) {
+    if (url === location.pathname + location.search + location.hash) return
+    history.pushState(null, '', url)
+    this.sync()
+    scrollTo(0, 0)
   }
-  /** Открыть карточку заявки на экране «Заявки». */
-  openApp(id: string) { this.go(auth.role === 'operator' ? 'myapps' : 'apps', id) }
-  home() {
-    const page = auth.role ? HOME[auth.role] : 'new'
-    this.page = page; this.param = ''
-    this.go(page)
+  replace(url: string) { history.replaceState(null, '', url); this.sync() }
+
+  /** Совпадение с шаблоном вида '/apps/:id' → параметры или null. */
+  match(pattern: string): Record<string, string> | null {
+    const a = pattern.split('/'), b = this.path.replace(/\/+$/, '').split('/')
+    if (a.length !== b.length) return null
+    const params: Record<string, string> = {}
+    for (let i = 0; i < a.length; i++) {
+      if (a[i].startsWith(':')) params[a[i].slice(1)] = decodeURIComponent(b[i])
+      else if (a[i] !== b[i]) return null
+    }
+    return params
   }
+  get isStaffArea() { return this.path === '/staff' || this.path.startsWith('/staff/') }
 }
 export const router = new Router()
