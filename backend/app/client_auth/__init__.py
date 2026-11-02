@@ -16,27 +16,17 @@ backend подключает его только через функции ни�
 JWT клиента: security.tokens.create_token(secret, username=client_id, role="client", token_version=<из clients>).
 """
 
-from fastapi import APIRouter
-
-router = APIRouter(tags=["client-auth"])
-
-
-def init_tables(db) -> None:
-    db.execute("""CREATE TABLE IF NOT EXISTS clients (
-        client_id TEXT PRIMARY KEY,
-        phone_hash TEXT UNIQUE NOT NULL,
-        phone_masked TEXT NOT NULL,
-        telegram_chat_id INTEGER,
-        token_version INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL)""")
+from backend.app.client_auth import telegram
+from backend.app.client_auth.routes import router
+from backend.app.client_auth.store import init_tables
 
 
 async def startup(state) -> None:
-    return None
+    await telegram.startup(state)
 
 
 async def shutdown(state) -> None:
-    return None
+    await telegram.shutdown(state)
 
 
 def client_token_version(db, client_id: str) -> int | None:
@@ -55,4 +45,4 @@ def phone_masked_of(db, client_id: str) -> str | None:
 
 
 async def notify_decision(state, client_id: str, app_id: str) -> None:
-    return None
+    await telegram.notify_decision(state, client_id, app_id)
