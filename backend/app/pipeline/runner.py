@@ -31,7 +31,7 @@ ASSUMED_BKI = BkiResult(status="SUCCESS", score=700, delinquency=False, requests
 def application_from_row(row) -> Application:
     return Application(app_id=row["app_id"], client_id=row["client_id"], passport_hash=row["passport_hash"],
                        age=row["age"], income=row["income"], employment=row["employment"], family=row["family"],
-                       amount=row["amount"], term=row["term"], product_id=row["product_id"])
+                       amount=row["amount"], term=row["term"], product_id=row["product_id"], amount_priority=row["amount_priority"])
 
 
 def reset_stages(state: AppState, app_id: str) -> None:

@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS applications (
     app_id TEXT PRIMARY KEY, client_id TEXT NOT NULL, passport_hash TEXT NOT NULL,
     age INTEGER, income REAL, employment TEXT, family TEXT, amount REAL, term INTEGER, product_id TEXT NOT NULL,
     channel TEXT NOT NULL, client_device_id_hash TEXT, parent_app_id TEXT,
+    amount_priority INTEGER NOT NULL DEFAULT 8 CHECK(amount_priority BETWEEN 0 AND 10),
     status TEXT NOT NULL, created_at TEXT NOT NULL, total_ms INTEGER, idempotency_key TEXT,
     fraud TEXT, ml_hint TEXT, review TEXT,           -- JSON: антифрод, подсказка модели, ручное решение
     auto_retries INTEGER NOT NULL DEFAULT 0          -- сколько раз систему перепроверила заявку сама
@@ -71,6 +72,10 @@ class Database:
         self.conn.row_factory = sqlite3.Row
         self.lock = threading.RLock()
         self.conn.executescript(SCHEMA)
+        columns = {r["name"] for r in self.conn.execute("PRAGMA table_info(applications)")}
+        if "amount_priority" not in columns:
+            self.conn.execute("ALTER TABLE applications ADD COLUMN amount_priority INTEGER NOT NULL DEFAULT 8 CHECK(amount_priority BETWEEN 0 AND 10)")
+            self.conn.commit()
         self.sync_users(credentials or [], bcrypt_rounds)
 
     def sync_users(self, credentials: list[dict], rounds: int) -> None:

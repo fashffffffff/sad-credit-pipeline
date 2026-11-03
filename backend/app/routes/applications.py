@@ -50,6 +50,7 @@ def detail(state, row, role: str) -> dict:
     out = {
         **summary(state, row, role),
         "age": row["age"], "income": row["income"], "employment": row["employment"], "family": row["family"],
+        "amount_priority": row["amount_priority"],
         "passport_hash_short": short_hash(row["passport_hash"]), "parent_app_id": row["parent_app_id"],
         "stages": visible_stages(
             [{"stage": s["stage"], "status": s["status"], "duration_ms": s["duration_ms"], "attempts": s["attempts"],
@@ -129,25 +130,47 @@ async def quote(request: Request, user: User = Depends(require_roles("client")),
     if not isinstance(body, dict):
         raise field_error({"body": "Нужен JSON-объект"})
     body = {k: v for k, v in body.items() if k != "client_device_id"}
+    profile_complete = body.pop("profile_complete", True)
+    age_known = body.pop("age_known", True)
+    if not isinstance(age_known, bool):
+        raise field_error({"age_known": "Должно быть логическое значение"})
+    if not isinstance(profile_complete, bool):
+        raise field_error({"profile_complete": "Должно быть логическое значение"})
     try:
-        app, _ = parse_form(body, need_passport=False)
+        app, _ = parse_form(body, need_passport=False, validate_product=False)
     except ApiError as exc:
-        if exc.status != 422:
+        if exc.status != 422 or "amount_priority" in exc.details.get("fields", {}):
             raise
-        blocking = [exc.error_code]
-        return {"dti": None, "monthly_payment": None, "partial_score": None, "max_partial_score": 90,
-                "eligible_products": [], "blocking": blocking, "fields": exc.details.get("fields", {})}
+        return {"status": "needs_data", "dti": None, "monthly_payment": None, "partial_score": None,
+                "max_partial_score": 90, "total_payment": None, "overpayment": None, "eligible_products": [], "blocking": [],
+                "fields": exc.details.get("fields", {}), "recommendations": []}
+    product = credit_core.PRODUCTS[app.product_id]
     local = credit_core.evaluate(app)
     _, parts, _ = credit_core.score_breakdown(app, None)
+    problems = product.problems(app.age if age_known else product.min_age, app.income, app.amount, app.term)
+    fields = {"product_id": f"Продукт «{product.name}»: нужно " + ", ".join(problems)} if problems else {}
     blocking = [local.reason] if local.decision else []
-    # лимит суммы (правило 8) виден уже по анкете — предупреждаем заранее, хотя в конвейере он проверяется после БКИ
     if not blocking and app.amount > AMOUNT_MULTIPLIER * app.income:
         blocking.append("AMOUNT_LIMIT")
-    return {"dti": None if local.dti is None else round(local.dti, 2),
-            "monthly_payment": None if local.monthly_payment is None else round(local.monthly_payment),
-            "partial_score": sum(p["points"] for p in parts), "max_partial_score": 90,
-            "eligible_products": [p.to_dict() for p in credit_core.eligible_products(app.age, app.income, app.amount, app.term)],
-            "blocking": blocking, "max_amount": _max_amount_hint(app), "fields": {}}
+    if problems:
+        blocking.insert(0, "PRODUCT_MISMATCH")
+    # Даже неподходящий срок не мешает посчитать аннуитет. Это расчёт, а не разрешение выдать продукт.
+    payment = credit_core.monthly_payment(app.amount, app.term, product.rate)
+    reason = "PRODUCT_MISMATCH" if problems else (blocking[0] if blocking else "")
+    recommendations = []
+    if profile_complete and reason in ("PRODUCT_MISMATCH", "HIGH_DTI", "AMOUNT_LIMIT"):
+        recommendations = [{**o, "preliminary": True} for o in credit_core.counter_offers(
+            app, credit_core.BkiResult(score=700), "MATCH", reason)]
+    return {"status": "product_mismatch" if problems else "ready",
+            "dti": round(payment / app.income, 2), "monthly_payment": round(payment),
+            "total_payment": round(payment * app.term), "overpayment": round(payment * app.term - app.amount),
+            "partial_score": sum(p["points"] for p in parts) if profile_complete else None,
+            "max_partial_score": 90,
+            "eligible_products": [p.to_dict() for p in sorted(credit_core.PRODUCTS.values(), key=lambda p: (p.rate, p.product_id))
+                                  if p.fits_client(app.age if age_known else p.min_age, app.income)
+                                  and p.min_amount <= app.amount <= p.max_amount],
+            "blocking": blocking, "max_amount": _max_amount_hint(app), "fields": fields,
+            "recommendations": recommendations}
 
 
 def _max_amount_hint(app) -> int:
@@ -284,7 +307,7 @@ async def accept_offer(app_id: str, body: AcceptOfferIn, user: User = Depends(re
     app = credit_core.Application(
         app_id="", passport_hash=row["passport_hash"], age=row["age"], income=row["income"],
         employment=row["employment"], family=row["family"], amount=offer["amount"], term=offer["term"],
-        product_id=offer["product_id"])
+        product_id=offer["product_id"], amount_priority=row["amount_priority"])
     errors = credit_core.validate_for_api(app)
     if errors:  # предложение устарело (правила изменились)
         raise ApiError(422, errors[0].code, errors[0].message, details={"fields": {e.field: e.message for e in errors}})

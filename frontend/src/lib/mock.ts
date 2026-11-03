@@ -1,3 +1,4 @@
+import { quoteOf } from './mockQuote'
 // МОК-РЕЖИМ (npm run dev:mock). Реализует тот же интерфейс Api, что и настоящий backend (контракт v6),
 // но всё считает прямо в браузере: правила кейса — копия credit_core (mockCore.ts), паспорт — настоящий OPRF с ключом в браузере.
 // Конвейер «идёт» по этапам с задержками, хаос-режим меняет исход, встречные предложения и автоповтор работают.
@@ -14,7 +15,7 @@ import {
   ApiError,
   type AppStatus, type ApplicationDetail, type ApplicationSummary, type AuditRecord, type BatchResult, type ChaosMode, type ChaosState,
   type Decision, type DecisionKind, type ExternalRequest, type MlHint, type Offer, type PhonePoll, type Role, type Service, type StageId,
-  type StageInfo, type Stats, type StreamEvent, type QuoteRequest, type Employment, type Family,
+  type Quote, type StageInfo, type Stats, type StreamEvent, type QuoteRequest, type Employment, type Family,
 } from './types'
 
 // ---------- мелкие утилиты ----------
@@ -108,7 +109,7 @@ async function magicOf(hash: string): Promise<number> {
 const chaos: Record<Service, ChaosState> = { smev: { mode: 'normal', delay_ms: 0 }, bki: { mode: 'normal', delay_ms: 0 } }
 
 function toCore(d: ApplicationDetail): CoreApp {
-  return { app_id: d.app_id, age: d.age, income: d.income, employment: d.employment, family: d.family, amount: d.amount, term: d.term, product_id: d.product_id }
+  return { amount_priority: d.amount_priority ?? 8, app_id: d.app_id, age: d.age, income: d.income, employment: d.employment, family: d.family, amount: d.amount, term: d.term, product_id: d.product_id }
 }
 
 /** Ответы БКИ и СМЭВ для заявки: хаос-режим, демо-паспорта (скрытый сценарий) или формулы эмуляторов. */
@@ -255,10 +256,10 @@ function registerNodeOnce(rec: AppRec, fraudScore: number) {
   emit({ type: 'graph', data: ev })
 }
 
-function newRecord(body: { age: number; income: number; employment: Employment; family: Family; amount: number; term: number; product_id: string }, clientId: string, phoneMasked: string, passportHash: string, deviceId: string, parent: string | null = null, createdAt = iso()): AppRec {
+function newRecord(body: { amount_priority?: number; age: number; income: number; employment: Employment; family: Family; amount: number; term: number; product_id: string }, clientId: string, phoneMasked: string, passportHash: string, deviceId: string, parent: string | null = null, createdAt = iso()): AppRec {
   const app_id = newAppId()
   const detail: ApplicationDetail = {
-    app_id, client_id: clientId, created_at: createdAt, status: 'PROCESSING', reason: '', amount: body.amount, term: body.term, product_id: body.product_id,
+    amount_priority: body.amount_priority ?? 8, app_id, client_id: clientId, created_at: createdAt, status: 'PROCESSING', reason: '', amount: body.amount, term: body.term, product_id: body.product_id,
     score: null, total_ms: null, age: body.age, income: body.income, employment: body.employment, family: body.family,
     passport_hash_short: passportHash.slice(0, 6) + '…', stages: freshStages(), decision: null, decisions_history: [], review: null, parent_app_id: parent, fraud: null, ml_hint: null,
   }
@@ -353,20 +354,6 @@ function view(rec: AppRec): ApplicationDetail {
 }
 
 // ---------- расчёт и подача ----------
-function quoteOf(q: QuoteRequest) {
-  const product = productById(q.product_id)
-  const app: CoreApp = { app_id: 'quote', ...q }
-  const dti = Math.round(computeDti(q.amount, q.term, q.income, product.rate) * 100) / 100
-  const blocking: string[] = []
-  const local = evaluate(app)
-  if (local.decision === 'REFUSED' || local.decision === 'NEED_MORE_DATA') blocking.push(local.reason)
-  if (!blocking.length && q.amount > 10 * q.income) blocking.push('AMOUNT_LIMIT')
-  return {
-    dti, monthly_payment: Math.round(monthlyPayment(q.amount, q.term, product.rate)), partial_score: partialScore(app), max_partial_score: 90,
-    eligible_products: eligibleProducts(q.age, q.income, q.amount, q.term), blocking,
-    max_amount: Math.floor(Math.min(10 * q.income, 1_000_000) / 10_000) * 10_000,
-  }
-}
 function validateBody(b: QuoteRequest) {
   const fields: Record<string, string> = {}
   if (!Number.isInteger(b.age) || b.age < 18 || b.age > 70) fields.age = 'Возраст должен быть от 18 до 70 лет'
@@ -532,7 +519,7 @@ export const mockApi: Api = {
     const offer = parent.detail.decision?.offers[idx]
     if (!offer) throw new ApiError(404, 'Такого предложения нет')
     const d = parent.detail
-    const body = { age: d.age, income: d.income, employment: d.employment, family: d.family, amount: offer.amount, term: offer.term, product_id: offer.product_id, passport_hash: parent.passport_hash, client_device_id: parent.keys.device }
+    const body = { amount_priority: d.amount_priority ?? 8, age: d.age, income: d.income, employment: d.employment, family: d.family, amount: offer.amount, term: offer.term, product_id: offer.product_id, passport_hash: parent.passport_hash, client_device_id: parent.keys.device }
     writeAudit('offer_accepted', id, w.id)
     return submit(body, key, w.id, parent.phone_masked, id)
   },

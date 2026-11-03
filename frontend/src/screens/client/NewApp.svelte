@@ -8,9 +8,9 @@
   import { api } from '../../lib/api'
   import { router } from '../../lib/router.svelte'
   import { deviceId, newKey } from '../../lib/device'
-  import { loadProducts } from '../../lib/products'
+  import { loadProducts, autoProduct } from '../../lib/products'
   import { EMPLOYMENT_LABEL, FAMILY_LABEL, errText, fmtMoney, fmtPct, fmtTerm, plural } from '../../lib/format'
-  import { ApiError, type Employment, type Family, type Product, type Quote } from '../../lib/types'
+  import { ApiError, type Employment, type Family, type Product, type Quote, type Offer } from '../../lib/types'
   import QuoteCard from '../../components/QuoteCard.svelte'
   import PassportStep from '../../components/PassportStep.svelte'
 
@@ -23,6 +23,7 @@
   let amount = $state(300000)
   let term = $state(24)
   let income = $state<number | null>(null)
+  let amountPriority = $state(8)
   let choice = $state<'auto' | string>('auto')
   let autoId = $state('prod_standard')
   let birth = $state('')
@@ -42,6 +43,7 @@
     return a
   })
   const ageError = $derived(age == null ? '' : age < 18 ? 'Кредит выдаётся с 18 лет' : age > 70 ? 'Кредит выдаётся до 70 лет' : '')
+  const profileComplete = $derived(age != null && !ageError && !!employment && !!family)
   const today = new Date().toISOString().slice(0, 10)
 
   // ---- живой расчёт ----
@@ -51,20 +53,21 @@
   let seq = 0
   const productId = $derived(choice === 'auto' ? autoId : choice)
   const product = $derived(products.find((p) => p.product_id === productId) ?? null)
-  const inputsOk = $derived(!!income && income > 0 && amount >= 10000 && amount <= 5000000 && term >= 3 && term <= 60)
+  const inputsOk = $derived(!!income && income > 0 && amount >= 10000 && amount <= 5000000 && Number.isInteger(term) && term >= 3 && term <= 60)
 
   $effect(() => {
     // зависимости читаем явно, чтобы эффект пересчитывался при любой правке
-    const body = { age: age != null && !ageError ? age : 30, income: income ?? 0, employment: (employment || 'employed') as Employment, family: (family || 'single') as Family, amount, term, product_id: productId }
-    if (!inputsOk) { quote = null; return }
     const my = ++seq
+    const body = { amount_priority: amountPriority, profile_complete: profileComplete, age_known: age != null && !ageError, age: age != null && !ageError ? age : 30, income: income ?? 0, employment: (employment || 'employed') as Employment, family: (family || 'single') as Family, amount, term, product_id: productId }
+    quote = null; quoteError = ''
+    if (!inputsOk) { pending = false; return }
     pending = true
     const t = setTimeout(async () => {
       try {
         const q = await api.quote(body)
         if (my !== seq) return
         quote = q; quoteError = ''
-        const best = q.eligible_products[0]
+        const best = autoProduct(products, amount, income ?? 0, age != null && !ageError ? age : null)
         if (choice === 'auto' && best && best.product_id !== autoId) autoId = best.product_id // подобрали другой — пересчитаем с ним
       } catch (e) {
         if (my !== seq) return
@@ -72,19 +75,19 @@
         quoteError = e instanceof ApiError && e.fields?.product_id ? e.fields.product_id : errText(e)
       } finally { if (my === seq) pending = false }
     }, 350)
-    return () => clearTimeout(t)
+    return () => { clearTimeout(t); if (seq === my) seq++ }
   })
 
-  const eligibleIds = $derived(new Set(quote?.eligible_products.map((p) => p.product_id) ?? []))
-  // если после ввода даты рождения выбранный вручную продукт перестал подходить — возвращаемся к автоподбору
-  $effect(() => { if (quote && choice !== 'auto' && !eligibleIds.has(choice)) choice = 'auto' })
+  function applyRecommendation(o: Offer) {
+    amount = o.amount; term = o.term; choice = o.product_id
+  }
 
   // ---- переходы между шагами ----
   let touched = $state<Record<number, boolean>>({})
   const step1Err = $derived({
     income: !income || income <= 0 ? 'Укажите ежемесячный доход' : '',
     amount: amount < 10000 || amount > 5000000 ? 'Сумма — от 10 000 до 5 000 000 ₽' : '',
-    term: term < 3 || term > 60 ? 'Срок — от 3 до 60 месяцев' : '',
+    term: !Number.isInteger(term) || term < 3 || term > 60 ? 'Срок — от 3 до 60 месяцев' : '',
   })
   const step2Err = $derived({
     birth: !birth ? 'Укажите дату рождения' : age == null ? 'Проверьте дату' : ageError,
@@ -108,7 +111,7 @@
   let key = '', keyBody = ''
   async function submit() {
     if (!hash || age == null || !income || !employment || !family) return
-    const body = { age, income, employment, family, amount, term, product_id: productId, passport_hash: hash, client_device_id: deviceId() }
+    const body = { amount_priority: amountPriority, age, income, employment, family, amount, term, product_id: productId, passport_hash: hash, client_device_id: deviceId() }
     const s = JSON.stringify(body)
     if (s !== keyBody) { key = newKey(); keyBody = s } // тот же запрос — тот же ключ: повторный клик не создаст вторую заявку
     busy = true; apiError = ''; dupId = null; fieldErrors = {}
@@ -116,8 +119,9 @@
       const r = await api.createApplication(body, key)
       router.go(`/apps/${r.app_id}`)
     } catch (e) {
-      if (e instanceof ApiError && e.status === 409 && e.code === 'duplicate_application') {
-        dupId = typeof e.data?.existing_id === 'string' ? e.data.existing_id : null
+      if (e instanceof ApiError && e.status === 409 && e.code.toUpperCase() === 'DUPLICATE_APPLICATION') {
+        const existing = (e.data?.details as { existing_app_id?: string } | undefined)?.existing_app_id ?? e.data?.existing_id
+        dupId = typeof existing === 'string' ? existing : null
         apiError = 'По этому паспорту уже есть заявка в работе. Дождитесь решения по ней.'
       } else if (e instanceof ApiError && e.status === 409) apiError = 'Эта заявка уже отправлена. Откройте «Мои заявки».'
       else if (e instanceof ApiError && e.fields) {
@@ -135,6 +139,17 @@
     set(d ? Number(d) : null)
   }
 </script>
+
+{#snippet recommendation(o: Offer)}
+<article class="recommendation">
+              <b>{o.product_name ?? o.product_id}</b>
+              <p>{fmtMoney(o.amount)} на {fmtTerm(o.term)} · {fmtPct(o.rate)}</p>
+              <p class="small">Платёж {fmtMoney(o.monthly_payment)}/мес. · Итого {o.total_payment == null ? '—' : fmtMoney(o.total_payment)} · Переплата {o.overpayment == null ? '—' : fmtMoney(o.overpayment)}</p>
+              <p class="dim small">{o.explanation ?? 'Вариант с изменением параметров кредита.'}</p>
+              <p class="small">Изменение суммы: {o.amount_delta == null ? '—' : `${o.amount_delta > 0 ? '+' : ''}${fmtMoney(o.amount_delta)}`}; срока: {o.term_delta == null ? '—' : `${o.term_delta > 0 ? '+' : ''}${o.term_delta} мес.`}</p>
+              <button class="btn" onclick={() => applyRecommendation(o)} disabled={pending}>Применить параметры</button>
+            </article>
+{/snippet}
 
 <div class="head">
   <a class="back dim small" href="/apps"><ArrowLeft size={15} /> Мои заявки</a>
@@ -164,6 +179,30 @@
           {#if touched[1] && step1Err.amount}<span class="err">{step1Err.amount}</span>{/if}
         </div>
 
+        <div class="field" class:invalid={touched[1] && step1Err.income}>
+          <label for="income"><span class="label">Ваш доход в месяц, до вычета налогов</span></label>
+          <div class="pair">
+            <input id="income" class="input mono" inputmode="numeric" placeholder="например, 80 000" value={income ? nf.format(income) : ''} oninput={(e) => onMoney(e, (n) => (income = n))} />
+            <span class="unit">₽</span>
+          </div>
+          {#if touched[1] && step1Err.income}<span class="err">{step1Err.income}</span>{/if}
+        </div>
+
+        <div class="field">
+          <label for="product" class="label">Кредитный продукт</label>
+          <select id="product" class="input" bind:value={choice} aria-describedby="product-hint">
+            <option value="auto">Подобрать за меня</option>
+            {#each products as p (p.product_id)}<option value={p.product_id}>{p.name}</option>{/each}
+          </select>
+          <p id="product-hint" class="dim small">
+            {#if product}
+              {choice === 'auto' ? `Предварительно выбран «${product.name}». ` : ''}Ставка {fmtPct(product.rate)} годовых · сумма {fmtMoney(product.min_amount)}–{fmtMoney(product.max_amount)}, не более 10 месячных доходов · срок {product.min_term}–{product.max_term} мес. · возраст {product.min_age}–{product.max_age} лет · доход от {fmtMoney(product.min_income)}.
+              {#if (age == null || ageError) && ['prod_student', 'prod_pension'].includes(product.product_id)}Проверим возраст на следующем шаге.
+              {:else if !profileComplete}Уточним соответствие после заполнения профиля.{/if}
+            {:else}Выберем минимальную ставку по сумме, доходу и известному возрасту. Срок не влияет на выбор продукта.{/if}
+          </p>
+          {#if quote?.fields.product_id}<span class="err">{quote.fields.product_id}</span>{/if}
+        </div>
         <div class="field" class:invalid={touched[1] && step1Err.term}>
           <label for="term"><span class="label">Срок</span></label>
           <div class="pair">
@@ -175,33 +214,6 @@
           {#if touched[1] && step1Err.term}<span class="err">{step1Err.term}</span>{/if}
         </div>
 
-        <div class="field" class:invalid={touched[1] && step1Err.income}>
-          <label for="income"><span class="label">Ваш доход в месяц, до вычета налогов</span></label>
-          <div class="pair">
-            <input id="income" class="input mono" inputmode="numeric" placeholder="например, 80 000" value={income ? nf.format(income) : ''} oninput={(e) => onMoney(e, (n) => (income = n))} />
-            <span class="unit">₽</span>
-          </div>
-          {#if touched[1] && step1Err.income}<span class="err">{step1Err.income}</span>{/if}
-        </div>
-
-        <fieldset class="prods">
-          <legend class="label">Продукт</legend>
-          <label class="opt" class:on={choice === 'auto'}>
-            <input type="radio" name="prod" checked={choice === 'auto'} onchange={() => (choice = 'auto')} />
-            <span><b>Подобрать за меня</b>
-              <small>{choice === 'auto' && product && quote && eligibleIds.has(product.product_id) ? `Вам подходит «${product.name}»: ставка ${fmtPct(product.rate)}` : 'Выберем самую выгодную ставку из подходящих'}</small></span>
-          </label>
-          {#if quote}
-            {#each products as p (p.product_id)}
-              {@const ok = eligibleIds.has(p.product_id)}
-              <label class="opt" class:on={choice === p.product_id} class:off={!ok}>
-                <input type="radio" name="prod" disabled={!ok} checked={choice === p.product_id} onchange={() => (choice = p.product_id)} />
-                <span><b>{p.name}</b><small>{fmtPct(p.rate)} годовых · {nf.format(p.min_amount)}–{nf.format(p.max_amount)} ₽ · {p.min_term}–{p.max_term} мес.{ok ? '' : ' · не подходит под ваши данные'}</small></span>
-              </label>
-            {/each}
-          {/if}
-          {#if quoteError}<span class="err">{quoteError}</span>{/if}
-        </fieldset>
       </div>
     {:else if step === 2}
       <h2>О себе</h2>
@@ -235,11 +247,33 @@
       <PassportStep bind:hash bind:passport />
     {:else}
       <h2>Проверьте и отправьте</h2>
+      <div class="field">
+        <label for="priority" class="label">Что важнее сохранить</label>
+        <input id="priority" class="range" type="range" min="0" max="10" step="1" bind:value={amountPriority} />
+        <p class="small">Сохранить сумму {amountPriority}/10 / сохранить срок {10 - amountPriority}/10</p>
+        <p class="dim small">Приоритет влияет на подбор вариантов, но не на скоринг и решение банка.</p>
+      </div>
+      {#if pending}<p class="dim small">Обновляем рекомендации…</p>{/if}
+      {#if quote?.recommendations?.length}
+        <section class="recommendations" aria-label="Предварительные рекомендации">
+          <h3>Варианты с учётом приоритета</h3>
+          <p class="dim small">Предварительный подбор по известным данным. БКИ и СМЭВ ещё не проверены; одобрение не гарантировано.</p>
+          {@render recommendation(quote.recommendations[0])}
+          {#if quote.recommendations.length > 1}
+            <details class="alternatives">
+              <summary>Ещё {quote.recommendations.length - 1} варианта для сравнения</summary>
+              {#each quote.recommendations.slice(1) as o}{@render recommendation(o)}{/each}
+            </details>
+          {/if}
+        </section>
+      {/if}
       <dl class="sum">
         <div><dt>Сумма</dt><dd class="mono">{fmtMoney(amount)}</dd></div>
         <div><dt>Срок</dt><dd>{fmtTerm(term)}</dd></div>
         <div><dt>Продукт</dt><dd>{product?.name ?? '—'}{product ? `, ${fmtPct(product.rate)}` : ''}</dd></div>
-        {#if quote}<div><dt>Платёж в месяц</dt><dd class="mono">{fmtMoney(quote.monthly_payment)}</dd></div>{/if}
+        {#if quote}<div><dt>Платёж в месяц</dt><dd class="mono">{quote.monthly_payment == null ? '—' : fmtMoney(quote.monthly_payment)}</dd></div>{/if}
+        {#if quote?.total_payment != null}<div><dt>Всего выплатить</dt><dd class="mono">{fmtMoney(quote.total_payment)}</dd></div>{/if}
+        {#if quote?.overpayment != null}<div><dt>Переплата по ставке</dt><dd class="mono">{fmtMoney(quote.overpayment)}</dd></div>{/if}
         <div><dt>Доход</dt><dd class="mono">{income ? fmtMoney(income) : '—'} в месяц</dd></div>
         <div><dt>Возраст</dt><dd>{ageText}</dd></div>
         <div><dt>Занятость</dt><dd>{employment ? EMPLOYMENT_LABEL[employment] : '—'}</dd></div>
@@ -247,6 +281,7 @@
         <div><dt>Паспорт</dt><dd class="code">отпечаток {hash?.slice(0, 6)}…</dd></div>
       </dl>
       <p class="privacy"><Lock size={15} /> Паспорт и дата рождения остаются у вас. В банк уходит возраст и отпечаток паспорта.</p>
+      {#if quote?.status === 'product_mismatch'}<p class="err small">Перед отправкой выберите допустимые условия или примените один из вариантов выше.</p>{/if}
       {#if apiError}
         <div class="errbox" role="alert">{apiError}{#if dupId} <a href={`/apps/${dupId}`}>Открыть заявку</a>{/if}</div>
       {/if}
@@ -257,19 +292,24 @@
       {#if step < 4}
         <button class="btn primary big" onclick={next} disabled={step === 3 && !hash}>Далее <ArrowRight size={16} /></button>
       {:else}
-        <button class="btn primary big" onclick={submit} disabled={busy}><Send size={16} /> {busy ? 'Отправляем…' : 'Отправить заявку'}</button>
+        <button class="btn primary big" onclick={submit} disabled={busy || pending || quote?.status !== 'ready'}><Send size={16} /> {busy ? 'Отправляем…' : 'Отправить заявку'}</button>
       {/if}
     </div>
   </section>
 
-  <div class="side"><QuoteCard {quote} {product} {pending} auto={choice === 'auto'} /></div>
+  <div class="side"><QuoteCard {quote} {product} {pending} error={quoteError} {profileComplete} auto={choice === 'auto'} /></div>
 </div>
 
 {#if quote && step < 4}
-  <div class="minibar" aria-hidden="true"><span>Платёж <b class="mono">{fmtMoney(quote.monthly_payment)}</b>/мес.</span><span>нагрузка <b class="mono">{fmtPct(quote.dti)}</b></span></div>
+  <div class="minibar" aria-hidden="true"><span>Платёж <b class="mono">{quote.monthly_payment == null ? '—' : fmtMoney(quote.monthly_payment)}</b>/мес.</span><span>нагрузка <b class="mono">{quote.dti == null ? '—' : fmtPct(quote.dti)}</b></span></div>
 {/if}
 
 <style>
+  .alternatives summary { cursor: pointer; color: var(--c-accent); padding: 10px 0; }
+  .alternatives .recommendation { margin-top: 10px; }
+  .recommendations { display: flex; flex-direction: column; gap: 12px; }
+  .recommendation { border: 1px solid var(--line-strong); border-radius: var(--radius-sm); padding: 14px; overflow-wrap: anywhere; }
+  .recommendation p { margin: 8px 0; }
   .head { margin-bottom: 14px; }
   .back { display: inline-flex; align-items: center; gap: 5px; text-decoration: none; margin-bottom: 6px; }
   .back:hover { color: var(--text); }
@@ -296,10 +336,7 @@
   .opt { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); cursor: pointer; background: var(--bg-panel); transition: border-color .15s, background .15s; }
   .opt:hover:not(.off) { border-color: var(--c-accent); }
   .opt.on { border-color: var(--c-accent); background: var(--accent-soft); box-shadow: 0 0 0 1px var(--c-accent); }
-  .opt.off { opacity: .55; cursor: not-allowed; }
   .opt input { margin-top: 4px; accent-color: var(--c-accent); flex: none; }
-  .opt b { display: block; font-weight: 600; }
-  .opt small { display: block; color: var(--c-muted); font-size: 13px; line-height: 1.35; }
   .seg { display: flex; flex-direction: row; flex-wrap: wrap; gap: 8px; }
   .seg legend { width: 100%; }
   .seg .err { width: 100%; }

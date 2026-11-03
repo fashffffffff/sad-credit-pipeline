@@ -23,7 +23,7 @@ export const computeDti = (amount: number, term: number, income: number, rate: n
 const fitsClient = (p: Product, age: number, income: number) => age >= p.min_age && age <= p.max_age && income >= p.min_income
 const fitsLoan = (p: Product, amount: number, term: number) => amount >= p.min_amount && amount <= p.max_amount && term >= p.min_term && term <= p.max_term
 export function eligibleProducts(age: number, income: number, amount?: number, term?: number): Product[] {
-  return PRODUCTS.filter((p) => fitsClient(p, age, income) && (amount == null || term == null || fitsLoan(p, amount, term))).sort((a, b) => a.rate - b.rate)
+  return PRODUCTS.filter((p) => fitsClient(p, age, income) && (amount == null || (amount >= p.min_amount && amount <= Math.min(p.max_amount, income * 10))) && (term == null || (term >= p.min_term && term <= p.max_term))).sort((a, b) => a.rate - b.rate)
 }
 export function productProblems(p: Product, age: number, income: number, amount: number, term: number): string[] {
   const out: string[] = []
@@ -38,7 +38,7 @@ import { clientText } from './reasons'
 
 // ---- движок ----
 export interface CoreApp {
-  app_id: string; age: number | null; income: number | null; employment: string | null; family: string | null
+  amount_priority?: number; app_id: string; age: number | null; income: number | null; employment: string | null; family: string | null
   amount: number | null; term: number | null; product_id: string
 }
 export interface CoreBki { status: 'SUCCESS' | 'TIMEOUT' | 'ERROR' | 'NOT_CALLED'; score?: number; delinquency?: boolean }
@@ -130,10 +130,11 @@ const maxAmountForDti = (term: number, income: number, rate: number, maxDti: num
   return r === 0 ? pay * term : (pay * (1 - (1 + r) ** -term)) / r
 }
 export function counterOffers(a: CoreApp, bki: CoreBki, smev: string, reason: string, limit = 3): Offer[] {
-  if (reason !== 'HIGH_DTI' && reason !== 'AMOUNT_LIMIT') return []
+  if (reason !== 'HIGH_DTI' && reason !== 'AMOUNT_LIMIT' && reason !== 'PRODUCT_MISMATCH') return []
   const STEP = 10000
   const base = productById(a.product_id)
   const tryOne = (p: Product, amount: number, term: number): Offer | null => {
+    if (!fitsClient(p, a.age!, a.income!)) return null
     if (!fitsLoan(p, amount, term)) return null
     const res = evaluate({ ...a, product_id: p.product_id, amount, term }, bki, smev)
     if (res.decision !== 'APPROVED') return null
@@ -146,7 +147,7 @@ export function counterOffers(a: CoreApp, bki: CoreBki, smev: string, reason: st
   const offers: Offer[] = []
   const o1 = tryOne(base, maxAmount(base, a.term!), a.term!)
   if (o1) offers.push(o1)
-  if (reason === 'HIGH_DTI') {
+  if (reason === 'HIGH_DTI' || reason === 'PRODUCT_MISMATCH') {
     for (let t = a.term! + 1; t <= base.max_term; t++) {
       const o = tryOne(base, a.amount!, t)
       if (o) { offers.push(o); break }
@@ -161,7 +162,12 @@ export function counterOffers(a: CoreApp, bki: CoreBki, smev: string, reason: st
   }
   if (best) offers.push(best)
   const uniq = new Map(offers.map((o) => [`${o.product_id}|${o.amount}|${o.term}`, o]))
-  return [...uniq.values()].sort((x, y) => y.amount - x.amount || x.monthly_payment - y.monthly_payment).slice(0, limit)
+  const weight = (a.amount_priority ?? 8) / 10
+  const cost = (o: Offer) => weight * Math.max(0, (a.amount! - o.amount) / a.amount!) + (1 - weight) * Math.max(0, (o.term - a.term!) / a.term!)
+  return [...uniq.values()].sort((x, y) => cost(x) - cost(y) || x.monthly_payment - y.monthly_payment).slice(0, limit).map((o) => ({ ...o,
+    preliminary: true, total_payment: o.monthly_payment * o.term, overpayment: o.monthly_payment * o.term - o.amount,
+    amount_delta: o.amount - a.amount!, term_delta: o.term - a.term!, explanation: 'Предварительный вариант с учётом приоритета суммы и срока.',
+  }))
 }
 
 // ---- эмуляторы БКИ и СМЭВ (раздел 3): детерминизм по хэшу ----

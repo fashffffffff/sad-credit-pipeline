@@ -9,7 +9,8 @@
     "build": "vite build",
     "build:mock": "VITE_MOCK=1 vite build",
     "preview": "vite preview",
-    "check": "svelte-check --tsconfig ./tsconfig.json"
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "test:loan-selection": "node scripts/check-loan-selection.mjs"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.3.1",

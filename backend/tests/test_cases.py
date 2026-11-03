@@ -72,12 +72,13 @@ async def test_high_dti_offers_are_marked_preliminary(env, client):
 
 
 async def test_accept_offer_creates_child_application(env, client):
-    d = await env.run(good_form(income=50000, amount=500000, term=12), client)
+    d = await env.run(good_form(income=50000, amount=500000, term=12, amount_priority=2), client)
     parent = d["app_id"]
     resp = await env.client.post(f"/api/v1/applications/{parent}/accept-offer", json={"offer_index": 0},
                                  headers=client | {"Idempotency-Key": "accept-1"})
     assert resp.status_code == 201
     child_id = resp.json()["app_id"]
+    assert env.state.db.query_one("SELECT amount_priority FROM applications WHERE app_id=?", (child_id,))["amount_priority"] == 2
     assert resp.json()["parent_app_id"] == parent
     # тот же ключ → тот же ответ, вторая заявка не создаётся
     again = await env.client.post(f"/api/v1/applications/{parent}/accept-offer", json={"offer_index": 0},

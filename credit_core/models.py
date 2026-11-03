@@ -21,6 +21,7 @@ class Application:
     client_id: str | None = None
     passport_hash: str | None = None
     product_id: str = "prod_standard"
+    amount_priority: int = 8  # 0 — сохранить срок, 10 — сохранить сумму; на скоринг не влияет
 
 
 @dataclass

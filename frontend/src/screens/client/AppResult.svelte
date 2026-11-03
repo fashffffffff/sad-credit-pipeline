@@ -143,8 +143,8 @@
 
     {#if decision.offers.length}
       <section class="offers" aria-labelledby="offh">
-        <h2 id="offh">Как получить одобрение</h2>
-        <p class="dim">Мы проверили варианты, при которых заявку одобрят. Выберите подходящий: проверять паспорт заново не нужно.</p>
+        <h2 id="offh">Другие варианты кредита</h2>
+        <p class="dim">Предварительные варианты по известным данным. Подача с новыми параметрами потребует проверок; одобрение не гарантировано. Проверять паспорт заново не нужно.</p>
         <ul>
           {#each decision.offers as o, i}
             <li class="panel offer">
@@ -152,6 +152,10 @@
                 <b class="display">{fmtMoney(o.amount)}</b>
                 <span class="small">{o.product_name ?? pname(o.product_id)}</span>
                 <span class="dim small">{offerSub(o)}</span>
+                <span class="small">Итого: {o.total_payment == null ? '—' : fmtMoney(o.total_payment)} · Переплата: {o.overpayment == null ? '—' : fmtMoney(o.overpayment)}</span>
+                <span class="dim small">Изменение суммы: {o.amount_delta == null ? '—' : `${o.amount_delta > 0 ? '+' : ''}${fmtMoney(o.amount_delta)}`}; срока: {o.term_delta == null ? '—' : `${o.term_delta > 0 ? '+' : ''}${o.term_delta} мес.`}</span>
+                {#if o.explanation}<span class="small">{o.explanation}</span>{/if}
+                <span class="dim small">Предварительный вариант. Окончательное решение — после проверок банка.</span>
               </div>
               <button class="btn primary" disabled={accepting !== null} onclick={() => accept(i)}>{accepting === i ? 'Отправляем…' : 'Подать с этими параметрами'}</button>
             </li>

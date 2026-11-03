@@ -1,0 +1,51 @@
+import assert from 'node:assert/strict'
+import { createServer } from 'vite'
+const server = await createServer({ server: { middlewareMode: true }, appType: 'custom' })
+try {
+  const { autoProduct } = await server.ssrLoadModule('/src/lib/products.ts')
+  const { PRODUCTS } = await server.ssrLoadModule('/src/lib/mockCore.ts')
+  assert.equal(autoProduct(PRODUCTS, 100000, 200000, null).product_id, 'prod_premium')
+  assert.equal(autoProduct(PRODUCTS, 100000, 200000, 22).product_id, 'prod_student')
+  assert.equal(autoProduct(PRODUCTS, 100000, 50000, 60).product_id, 'prod_pension')
+  const { quoteOf } = await server.ssrLoadModule('/src/lib/mockQuote.ts')
+  const base = { age: 30, income: 3430000, employment: 'employed', family: 'single', amount: 5000000, term: 3, product_id: 'prod_premium', amount_priority: 8, profile_complete: true }
+  const mismatch = quoteOf(base)
+  assert.equal(mismatch.status, 'product_mismatch')
+  assert.ok(mismatch.monthly_payment > 0)
+  assert.match(mismatch.fields.product_id, /12–60/)
+  assert.ok(mismatch.eligible_products.some(p => p.product_id === 'prod_premium'))
+  assert.ok(mismatch.recommendations.some(o => o.amount === 5000000 && o.term >= 12))
+  assert.ok(mismatch.recommendations.every(o => o.preliminary && o.total_payment > o.amount && o.amount_delta === o.amount - base.amount && o.term_delta === o.term - base.term))
+  const wrongAge = quoteOf({ ...base, age: 30, income: 200000, amount: 100000, term: 12, product_id: 'prod_student' })
+  assert.equal(wrongAge.status, 'product_mismatch')
+  assert.ok(wrongAge.recommendations.every(o => o.product_id !== 'prod_student'))
+  const incomplete = quoteOf({ ...base, profile_complete: false })
+  assert.equal(incomplete.partial_score, null)
+  assert.deepEqual(incomplete.blocking, [])
+  const missing = quoteOf({ ...base, income: 0 })
+  assert.equal(missing.status, 'needs_data')
+  assert.equal(missing.monthly_payment, null)
+  assert.equal(missing.dti, null)
+  assert.deepEqual(missing.blocking, [])
+  const lowIncome = quoteOf({ ...base, income: 20000 })
+  assert.ok(lowIncome.monthly_payment > 0)
+  const amountFirst = quoteOf({ ...base, amount_priority: 10 }).recommendations[0]
+  const termFirst = quoteOf({ ...base, amount_priority: 0 }).recommendations[0]
+  assert.equal(amountFirst.amount, base.amount)
+  assert.equal(termFirst.term, base.term)
+  assert.notEqual(amountFirst.product_id, termFirst.product_id)
+  for (const product_id of ['prod_student', 'prod_pension']) {
+    const unknownAge = quoteOf({ ...base, product_id, amount: 100000, term: 12, age_known: false, profile_complete: false })
+    assert.equal(unknownAge.status, 'ready')
+    assert.ok(unknownAge.monthly_payment > 0)
+    assert.equal(unknownAge.partial_score, null)
+    assert.deepEqual(unknownAge.blocking, [])
+    assert.ok(unknownAge.eligible_products.some(p => p.product_id === product_id))
+  }
+  const financialLimit = quoteOf({ ...base, product_id: 'prod_standard', amount: 1000000, income: 40000, term: 3, profile_complete: false })
+  assert.ok(financialLimit.blocking.includes('HIGH_DTI') || financialLimit.blocking.includes('AMOUNT_LIMIT'))
+  assert.equal(financialLimit.partial_score, null)
+  const ready = quoteOf({ ...base, term: 12 })
+  assert.equal(ready.status, 'ready')
+  console.log('Loan selection: screenshot mismatch, premium minimum term, nullable data, incomplete profile, priority ranking and ready quote passed.')
+} finally { await server.close() }

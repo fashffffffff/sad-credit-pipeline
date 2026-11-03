@@ -31,15 +31,19 @@ export interface Product {
 export interface QuoteRequest {
   age: number; income: number; employment: Employment; family: Family
   amount: number; term: number; product_id: string
+  amount_priority?: number; profile_complete?: boolean; age_known?: boolean
 }
 export interface Quote {
-  dti: number; monthly_payment: number; partial_score: number; max_partial_score: number
+  status: 'ready' | 'needs_data' | 'product_mismatch'
+  total_payment?: number | null; overpayment?: number | null
+  fields: Record<string, string>; recommendations: Offer[]
+  dti: number | null; monthly_payment: number | null; partial_score: number | null; max_partial_score: number
   eligible_products: Product[]; blocking: string[]
   max_amount?: number  // наибольшая сумма на этот срок, которая пройдёт DTI и лимит 10 доходов
 }
 
 // ---- заявка ----
-export interface ApplicationCreate extends QuoteRequest {
+export interface ApplicationCreate extends Omit<QuoteRequest, 'profile_complete' | 'age_known'> {
   passport_hash: string
   client_device_id: string
 }
@@ -47,7 +51,9 @@ export interface Breakdown { feature: string; label_ru: string; value: number | 
 export interface TraceStep { n: number; code: string; check_ru: string; value: string | number | null; passed: boolean }
 export interface Offer {
   product_id: string; product_name?: string; amount: number; term: number; rate: number
-  monthly_payment: number; dti: number; score: number
+  monthly_payment: number; dti: number; score: number | null
+  total_payment?: number; overpayment?: number; amount_delta?: number; term_delta?: number
+  explanation?: string; preliminary?: boolean; status?: 'preliminary'
 }
 export interface Decision {
   app_id: string; decision: DecisionKind; reason: string; reason_text: string
@@ -93,6 +99,7 @@ export interface ExternalRequest {
 export interface Review { by: string; decision: 'APPROVED' | 'REFUSED'; comment: string; at: string }
 
 export interface ApplicationDetail extends ApplicationSummary {
+  amount_priority?: number
   age: number; income: number; employment: Employment; family: Family
   passport_hash_short: string
   stages: StageInfo[]

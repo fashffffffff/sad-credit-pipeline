@@ -29,7 +29,7 @@ async def test_products_and_quote(env, client, uw):
     assert q["blocking"] == [] and "prod_standard" in {p["product_id"] for p in q["eligible_products"]}
     assert env.state.db.query_one("SELECT COUNT(*) AS n FROM applications")["n"] == 0  # ничего не сохраняется
     low = (await env.client.post("/api/v1/quote", json=form | {"income": 20000}, headers=client)).json()
-    assert low["blocking"] and low["dti"] is None
+    assert low["blocking"] and low["dti"] > 0  # финансовый расчёт есть и при неподходящем продукте
     high = (await env.client.post("/api/v1/quote", json=form | {"income": 50000, "term": 12}, headers=client)).json()
     assert high["blocking"] == ["HIGH_DTI"] and high["dti"] > 0.5
     assert (await env.client.post("/api/v1/quote", json=form | {"employment": "unemployed"}, headers=client)).json()["blocking"] == ["INVALID_EMPLOYMENT"]
