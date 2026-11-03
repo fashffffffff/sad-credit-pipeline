@@ -136,5 +136,9 @@ def human_value(name: str, value: float) -> float:
         return round(math.expm1(value))
     if name == "log_income_to_amount":
         return round(math.exp(value), 2)
+    if name == "amount_norm":  # в модель идёт доля от 5 млн ₽
+        return round(value * 5_000_000)
+    if name == "term_norm":    # доля от 84 месяцев
+        return round(value * 84)
     return round(value, 3)
 
