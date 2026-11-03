@@ -18,7 +18,7 @@ export type Family = 'single' | 'married' | 'children'
 export type AuthMethod = 'telegram' | 'call' | 'yandex' | 'vk' | 'demo'
 export interface AuthProviders { providers: AuthMethod[]; demo?: boolean }
 export type ChallengeStatus = 'pending' | 'verified' | 'expired' | 'mismatch'
-export interface PhoneStart { challenge_id: string; deep_link?: string; call_to?: string; demo_code?: string; expires_in: number }
+export interface PhoneStart { challenge_id: string; deep_link?: string; call_to?: string; demo?: boolean; code?: string; expires_in: number }
 export interface PhonePoll { status: ChallengeStatus; access_token?: string }
 export interface StaffLogin { access_token: string; username: string; role: StaffRole }
 
@@ -35,6 +35,7 @@ export interface QuoteRequest {
 export interface Quote {
   dti: number; monthly_payment: number; partial_score: number; max_partial_score: number
   eligible_products: Product[]; blocking: string[]
+  max_amount?: number  // наибольшая сумма на этот срок, которая пройдёт DTI и лимит 10 доходов
 }
 
 // ---- заявка ----

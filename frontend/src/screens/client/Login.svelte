@@ -192,7 +192,7 @@
         <a class="callnum display" href={`tel:${(start.call_to ?? '').replace(/[^\d+]/g, '')}`}>{start.call_to}</a>
       {:else}
         <h2>Введите код</h2>
-        <div class="democode" role="note"><span class="tag">демо</span><span>Ваш код: <b class="code big6">{start.demo_code}</b></span></div>
+        <div class="democode" role="note"><span class="tag">демо</span><span>Ваш код: <b class="code big6">{start.code}</b></span></div>
         <p class="dim small sub">В настоящем банке он пришёл бы в SMS. Здесь показываем его на экране, чтобы вы могли пройти весь путь.</p>
         <form onsubmit={(e) => { e.preventDefault(); sendCode() }}>
           <label class="field"><span class="label">Код из 6 цифр</span>

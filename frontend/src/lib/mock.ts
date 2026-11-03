@@ -364,6 +364,7 @@ function quoteOf(q: QuoteRequest) {
   return {
     dti, monthly_payment: Math.round(monthlyPayment(q.amount, q.term, product.rate)), partial_score: partialScore(app), max_partial_score: 90,
     eligible_products: eligibleProducts(q.age, q.income, q.amount, q.term), blocking,
+    max_amount: Math.floor(Math.min(10 * q.income, 1_000_000) / 10_000) * 10_000,
   }
 }
 function validateBody(b: QuoteRequest) {
@@ -475,7 +476,7 @@ export const mockApi: Api = {
     await sleep(250)
     if (channel === 'telegram') return { challenge_id: id, deep_link: 'https://t.me/sad_credit_bot?start=' + id.slice(3), expires_in: 300 }
     if (channel === 'call') return { challenge_id: id, call_to: '+7 495 123-45-67', expires_in: 300 }
-    return { challenge_id: id, demo_code: ch.code, expires_in: 300 }
+    return { challenge_id: id, demo: true, code: ch.code, expires_in: 300 }
   },
   async phonePoll(id) {
     const ch = challenges.get(id)

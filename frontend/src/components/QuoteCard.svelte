@@ -38,7 +38,7 @@
     {#if quote.blocking.length}
       <div class="warn" role="note">
         <TriangleAlert size={18} />
-        <div><b>Скорее всего, откажут</b>{#each quote.blocking as b}<p class="small">{clientText(b)}</p>{/each}<p class="small dim">Попробуйте изменить сумму или срок: расчёт обновится сразу.</p></div>
+        <div><b>Скорее всего, откажут</b>{#each quote.blocking as b}<p class="small">{clientText(b)}</p>{/each}{#if quote.max_amount && quote.blocking.some((b) => b === 'AMOUNT_LIMIT' || b === 'HIGH_DTI')}<p class="small">На этот срок можно до <b>{fmtMoney(quote.max_amount)}</b>.</p>{/if}<p class="small dim">Попробуйте изменить сумму или срок: расчёт обновится сразу.</p></div>
       </div>
     {:else if product}
       <p class="fit small">{auto ? `Вам подходит «${product.name}»: ставка ${fmtPct(product.rate)}.` : `Выбран «${product.name}».`}</p>

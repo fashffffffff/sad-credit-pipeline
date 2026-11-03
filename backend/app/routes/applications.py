@@ -5,6 +5,7 @@ import json
 import re
 
 import credit_core
+from credit_core.rules import AMOUNT_MULTIPLIER, MAX_DTI
 from credit_core import Decision
 from fastapi import APIRouter, Depends, Header, Request, Response
 from fastapi.responses import JSONResponse
@@ -138,11 +139,22 @@ async def quote(request: Request, user: User = Depends(require_roles("client")),
                 "eligible_products": [], "blocking": blocking, "fields": exc.details.get("fields", {})}
     local = credit_core.evaluate(app)
     _, parts, _ = credit_core.score_breakdown(app, None)
+    blocking = [local.reason] if local.decision else []
+    # лимит суммы (правило 8) виден уже по анкете — предупреждаем заранее, хотя в конвейере он проверяется после БКИ
+    if not blocking and app.amount > AMOUNT_MULTIPLIER * app.income:
+        blocking.append("AMOUNT_LIMIT")
     return {"dti": None if local.dti is None else round(local.dti, 2),
             "monthly_payment": None if local.monthly_payment is None else round(local.monthly_payment),
             "partial_score": sum(p["points"] for p in parts), "max_partial_score": 90,
             "eligible_products": [p.to_dict() for p in credit_core.eligible_products(app.age, app.income, app.amount, app.term)],
-            "blocking": [local.reason] if local.decision else [], "fields": {}}
+            "blocking": blocking, "max_amount": _max_amount_hint(app), "fields": {}}
+
+
+def _max_amount_hint(app) -> int:
+    """Наибольшая сумма на этот срок, которая пройдёт DTI и лимит 10 доходов (кратно 10 000 ₽)."""
+    product = credit_core.PRODUCTS[app.product_id]
+    by_dti = credit_core.max_amount_for_dti(app.term, app.income, product.rate, MAX_DTI + 0.005)
+    return int(min(by_dti, AMOUNT_MULTIPLIER * app.income, product.max_amount) // 10_000 * 10_000)
 
 
 @router.post("/applications", status_code=201)
