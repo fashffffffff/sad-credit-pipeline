@@ -19,7 +19,7 @@ export type AuthMethod = 'telegram' | 'call' | 'yandex' | 'vk' | 'demo'
 export interface AuthProviders { providers: AuthMethod[]; demo?: boolean }
 export type ChallengeStatus = 'pending' | 'verified' | 'expired' | 'mismatch'
 export interface PhoneStart { challenge_id: string; deep_link?: string; call_to?: string; demo?: boolean; code?: string; expires_in: number }
-export interface PhonePoll { status: ChallengeStatus; access_token?: string }
+export interface PhonePoll { status: ChallengeStatus; access_token?: string; phone_masked?: string }
 export interface StaffLogin { access_token: string; username: string; role: StaffRole }
 
 // ---- продукты и расчёт ----

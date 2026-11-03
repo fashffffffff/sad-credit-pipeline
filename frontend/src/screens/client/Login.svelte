@@ -158,7 +158,7 @@
       <div class="methods">
         {#if has('telegram')}<button class="method" disabled={busy} onclick={() => pick('telegram')}><span class="mi tg"><Send size={20} /></span><span><b>Подтвердить через Telegram</b><small>Нажмёте кнопку в боте</small></span></button>{/if}
         {#if has('call')}<button class="method" disabled={busy} onclick={() => pick('call')}><span class="mi"><Phone size={20} /></span><span><b>Позвонить</b><small>Бесплатный звонок, сбросится сам</small></span></button>{/if}
-        {#if has('yandex')}<button class="method" disabled={busy} onclick={() => pick('yandex')}><span class="mi ya">Я</span><span><b>Яндекс ID</b><small>Войти через аккаунт Яндекса</small></span></button>{/if}
+        {#if has('yandex')}<button class="method" disabled={busy} onclick={() => pick('yandex')}><span class="mi ya"><img src="/brand/yandex-id.svg" alt="" width="40" height="40" /></span><span><b>Яндекс ID</b><small>Войти через аккаунт Яндекса</small></span></button>{/if}
         {#if has('vk')}<button class="method" disabled={busy} onclick={() => pick('vk')}><span class="mi vk">VK</span><span><b>VK ID</b><small>Войти через аккаунт VK</small></span></button>{/if}
         {#if has('demo')}<button class="method" disabled={busy} onclick={() => pick('demo')}><span class="mi demo"><KeyRound size={20} /></span><span><b>Демо-код <em class="tag">демо</em></b><small>Код покажем прямо на экране</small></span></button>{/if}
       </div>
@@ -240,7 +240,8 @@
   .method small { display: block; color: var(--c-muted); font-size: 13px; }
   .mi { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; background: var(--accent-soft); color: var(--c-accent); font-weight: 700; font-size: 14px; }
   .mi.tg { background: #e3f3fc; color: #1c93d4; }
-  .mi.ya { background: #fde8e6; color: #e0291a; font-size: 18px; }
+  .mi.ya { background: transparent; }
+  .mi.ya img { display: block; }
   .mi.vk { background: #e5eeff; color: #0077ff; }
   .mi.demo { background: var(--warn-soft); color: var(--warn-text); }
   .tag { font-style: normal; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; background: var(--warn-soft); color: var(--warn-text); margin-left: 6px; }

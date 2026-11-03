@@ -16,7 +16,7 @@
     if (q.get('error') || !code || !state) { error = 'Вход отменён или не завершён.'; return }
     const device_id = q.get('device_id') ?? undefined
     api.oauthCallback(provider, { code, state, ...(device_id ? { device_id } : {}) }).then((r) => {
-      if (r.status === 'verified' && r.access_token) { auth.loginClient(r.access_token); router.replace('/apps') }
+      if (r.status === 'verified' && r.access_token) { auth.loginClient(r.access_token, r.phone_masked); router.replace('/apps') }
       else error = 'Не удалось подтвердить вход. Попробуйте ещё раз.'
     }).catch((e) => (error = errText(e)))
   })

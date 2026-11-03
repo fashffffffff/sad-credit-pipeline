@@ -359,6 +359,8 @@ def test_yandex_success(client, net, oauth_env):
     assert r.status_code == 200
     d = r.json()
     assert d["client_id"] == "cli_0001" and d["phone_masked"] == "+7 999 ***-**-67" and "phone_missing" not in d
+    assert d["status"] == "verified"  # экран AuthCallback принимает вход только после подтверждения
+    assert d["access_token"] and d["role"] == "client"
 
 
 def test_vk_success_and_state_long_enough(client, net, oauth_env):
@@ -367,6 +369,7 @@ def test_vk_success_and_state_long_enough(client, net, oauth_env):
     assert url.netloc == "id.vk.ru" and len(state) >= 32
     r = client.post(f"{A}/oauth/vk/callback", json={"code": "c", "state": state, "device_id": "dev1"})
     assert r.status_code == 200 and r.json()["phone_masked"] == "+7 999 ***-**-67"
+    assert r.json()["status"] == "verified"
 
 
 def test_oauth_forged_and_replayed_state(client, net, oauth_env, db):

@@ -105,4 +105,6 @@ async def callback(db, provider: str, code: str, state: str, device_id: str | No
         store.login_failed(db, provider, "provider_error")
         raise ApiError(400, "PROVIDER_ERROR", "Не удалось войти через сервис — попробуйте ещё раз")
     client_id = store.client_for_oauth(db, provider, uid, phone)
-    return store.login_result(db, client_id, provider, **({"phone_missing": True} if phone is None else {}))
+    # Экран возврата использует тот же признак завершённого входа, что и подтверждение телефона.
+    return {"status": "verified", **store.login_result(
+        db, client_id, provider, **({"phone_missing": True} if phone is None else {}))}
