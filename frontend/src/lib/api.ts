@@ -7,6 +7,7 @@ import {
   type BatchResult, type ChaosMode, type ChaosState, type Decision, type ExternalRequest, type FraudGraph, type GraphEvent, type Health,
   type Metrics, type ModelFeatures, type OprfResponse, type PassportPublicKey, type PhonePoll, type PhoneStart, type Product, type Quote,
   type QuoteRequest, type Service, type SimScenario, type Stats, type StaffLogin, type StreamEvent, type VerifyKey, type VerifyResult,
+  type BkiLoan, type Prediction,
 } from './types'
 
 export type ConnState = 'connecting' | 'online' | 'offline'
@@ -146,7 +147,7 @@ const realApi: Api = {
   certificatePdf: async (id) => (await raw('GET', `/applications/${id}/certificate.pdf`)).blob(),
 
   listApplications: (status, limit = 50) => request('GET', `/applications?limit=${limit}${status ? `&status=${status}` : ''}`),
-  getApplication: (id) => request('GET', `/applications/${id}`),
+  getApplication: (id) => request<ApplicationDetail>('GET', `/applications/${id}`).then(normalizeHint),
   getDecision: async (id) => {
     try { return await request<Decision>('GET', `/applications/${id}/decision`) }
     catch (e) { if (e instanceof ApiError && (e.status === 425 || e.status === 404)) return null; throw e }
@@ -243,3 +244,13 @@ function lazyMock(): Api {
 }
 export const api: Api = import.meta.env.VITE_MOCK ? lazyMock() : realApi
 export type { AuthMethod }
+
+
+/** Backend отдаёт ML-подсказку плоско ({pd, score, base_score, contributions, heatmap, summary_ru}),
+ *  экраны ждут {prediction, text, loans}. Приводим к одному виду (мок уже отдаёт нужный). */
+function normalizeHint(app: ApplicationDetail): ApplicationDetail {
+  const h = app.ml_hint as unknown as Record<string, unknown> | null | undefined
+  if (!h || 'prediction' in h) return app
+  const prediction = { pd: h.pd, score: h.score, base_score: h.base_score, contributions: h.contributions ?? [] } as Prediction
+  return { ...app, ml_hint: { prediction, text: h.summary_ru as string | undefined, loans: (h.heatmap as BkiLoan[] | undefined) ?? [] } }
+}

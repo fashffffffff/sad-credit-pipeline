@@ -81,7 +81,7 @@ async def _smev_stage(run: Run, app: Application) -> str:
         run.finish("smev", started, "fail", f"СМЭВ не ответил: {'таймаут' if status == 'TIMEOUT' else 'ошибка'}", attempts)
         return "TIMEOUT"
     if data["status"] == "MISMATCH":
-        run.finish("smev", started, "fail", "СМЭВ: данные не совпали", attempts)
+        run.finish("smev", started, "fail", "Данные не совпали", attempts)
     else:
         run.finish("smev", started, "ok", "СМЭВ подтвердил данные", attempts)
     return data["status"]

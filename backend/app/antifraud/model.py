@@ -109,7 +109,7 @@ class FraudModel:
         for i in np.argsort(-positive)[:3]:
             if positive[i] > 0:
                 name = FEATURE_NAMES[i]
-                out.append({"feature": name, "label_ru": FEATURE_LABELS[name], "value": round(float(vec[name]), 3),
+                out.append({"feature": name, "label_ru": FEATURE_LABELS[name], "value": human_value(name, float(vec[name])),
                             "share": round(float(positive[i] / total), 3)})
         return out
 
@@ -123,3 +123,18 @@ def reference_model() -> FraudModel:
 
 
 __all__ = ["FraudModel", "reference_model", "SCHEME_RU", "vectors_for", "event_to_node"]
+
+
+def human_value(name: str, value: float) -> float:
+    """Значение признака в понятных единицах для объяснения (в модель идут логарифмы).
+
+    log1p-признаки возвращаем к исходному числу; паузу — из секунд в минуты.
+    """
+    if name == "log_gap_device":
+        return round(math.expm1(value) / 60, 1)
+    if name in ("log_comp_size", "log_comp_growth", "log_comp_passports"):
+        return round(math.expm1(value))
+    if name == "log_income_to_amount":
+        return round(math.exp(value), 2)
+    return round(value, 3)
+
