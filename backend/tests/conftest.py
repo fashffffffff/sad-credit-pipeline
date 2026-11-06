@@ -174,7 +174,7 @@ class Env:
 
 def good_form(**overrides) -> dict:
     form = {"passport_hash": GOOD_HASH, "age": 32, "income": 120000, "employment": "employed", "family": "married",
-            "amount": 500000, "term": 24, "product_id": "prod_standard"}
+            "amount": 500000, "term": 24, "product_id": "prod_standard", "consent": True}
     return form | overrides
 
 

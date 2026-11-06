@@ -15,18 +15,22 @@ from backend.app.state import AppState
 # поля анкеты 2.1 контракта (+ id устройства из приложения). Всё остальное (ФИО, телефон, паспорт…) — ошибка 422:
 # мы такие данные не собираем (минимизация ПДн, запрет дискриминации)
 FORM_FIELDS = ("passport_hash", "age", "income", "employment", "family", "amount", "term", "product_id")
-ALLOWED_KEYS = set(FORM_FIELDS) | {"client_device_id", "amount_priority"}
+ALLOWED_KEYS = set(FORM_FIELDS) | {"client_device_id", "amount_priority", "consent"}
 MAX_INCOME = 1_000_000_000  # ₽ в месяц: больше — заведомо мусор (и не влезает в SQLite)
 DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
 
 
-def parse_form(body, need_passport: bool = True, validate_product: bool = True) -> tuple[Application, str | None]:
+def parse_form(body, need_passport: bool = True, validate_product: bool = True, need_consent: bool = False) -> tuple[Application, str | None]:
     """Тело запроса → Application и id устройства. Ошибки анкеты — 422 в формате Error (credit_core.validate_for_api)."""
     if not isinstance(body, dict):
         raise field_error({"body": "Нужен JSON-объект с полями анкеты"})
     extra = sorted(set(body) - ALLOWED_KEYS)
     if extra:
         raise field_error({k: "Это поле не принимается" for k in extra}, "Лишние поля в анкете")
+    if need_consent and body.get("consent") is not True:
+        # согласие на обработку данных обязательно только при подаче заявки, не для расчёта до подачи
+        raise field_error({"consent": "Подтвердите согласие с условиями обработки данных"},
+                          "Нет согласия на обработку данных", "CONSENT_REQUIRED")
     priority = body.get("amount_priority", 8)
     if not isinstance(priority, int) or isinstance(priority, bool) or not 0 <= priority <= 10:
         raise ApiError(422, "INVALID_PRIORITY", "Выберите важность суммы от 0 до 10",
@@ -66,7 +70,8 @@ def parse_form(body, need_passport: bool = True, validate_product: bool = True) 
 
 def create_application(state: AppState, app: Application, client_id: str, *, device_id: str | None = None,
                        device_hash: str | None = None, channel: str = "online", parent_app_id: str | None = None,
-                       idempotency_key: str | None = None, actor: str | None = None, actor_role: str = "client") -> str:
+                       idempotency_key: str | None = None, actor: str | None = None, actor_role: str = "client",
+                       consent: bool = False) -> str:
     """Сохраняет заявку (в БД — только passport_hash и хэш устройства) и переводит её в PROCESSING."""
     if device_id and not device_hash:
         device_hash = fingerprint(state.settings.pii_pepper, "device", device_id)
@@ -83,7 +88,7 @@ def create_application(state: AppState, app: Application, client_id: str, *, dev
                    (app_id, name, position))
     audit.write(db, actor or client_id, actor_role, "application_created", app_id,
                 details={"amount": app.amount, "term": app.term, "product_id": app.product_id,
-                         "amount_priority": app.amount_priority,
+                         "amount_priority": app.amount_priority, "consent_accepted": bool(consent),
                          **({"parent_app_id": parent_app_id} if parent_app_id else {})})
     return app_id
 

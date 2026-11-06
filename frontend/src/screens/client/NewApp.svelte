@@ -105,13 +105,15 @@
 
   // ---- отправка ----
   let busy = $state(false)
+  let consent = $state(false)
+  let consentOpen = $state(false)
   let apiError = $state('')
   let dupId = $state<string | null>(null)
   let fieldErrors = $state<Record<string, string>>({})
   let key = '', keyBody = ''
   async function submit() {
-    if (!hash || age == null || !income || !employment || !family) return
-    const body = { amount_priority: amountPriority, age, income, employment, family, amount, term, product_id: productId, passport_hash: hash, client_device_id: deviceId() }
+    if (!consent || !hash || age == null || !income || !employment || !family) return
+    const body = { amount_priority: amountPriority, age, income, employment, family, amount, term, product_id: productId, passport_hash: hash, client_device_id: deviceId(), consent: true }
     const s = JSON.stringify(body)
     if (s !== keyBody) { key = newKey(); keyBody = s } // тот же запрос — тот же ключ: повторный клик не создаст вторую заявку
     busy = true; apiError = ''; dupId = null; fieldErrors = {}
@@ -292,12 +294,33 @@
       {#if step < 4}
         <button class="btn primary big" onclick={next} disabled={step === 3 && !hash}>Далее <ArrowRight size={16} /></button>
       {:else}
-        <button class="btn primary big" onclick={submit} disabled={busy || pending || quote?.status !== 'ready'}><Send size={16} /> {busy ? 'Отправляем…' : 'Отправить заявку'}</button>
+        <label class="consent">
+          <input type="checkbox" bind:checked={consent} />
+          <span>Я даю согласие на обработку персональных данных и принимаю
+            <button type="button" class="link" onclick={() => (consentOpen = true)}>пользовательское соглашение</button></span>
+        </label>
+        <button class="btn primary big" onclick={submit} disabled={busy || pending || !consent || quote?.status !== 'ready'}><Send size={16} /> {busy ? 'Отправляем…' : 'Отправить заявку'}</button>
       {/if}
     </div>
   </section>
 
   <div class="side"><QuoteCard {quote} {product} {pending} error={quoteError} {profileComplete} auto={choice === 'auto'} /></div>
+
+  {#if consentOpen}
+    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+  <div class="overlay" role="dialog" aria-modal="true" aria-label="Пользовательское соглашение" tabindex="-1" onclick={(e) => { if (e.target === e.currentTarget) consentOpen = false }} onkeydown={(e) => { if (e.key === "Escape") consentOpen = false }}>
+      <div class="dialog">
+        <h3>Пользовательское соглашение и согласие на обработку данных</h3>
+        <p>Оператор данных — банк «Фин-Тех» (учебный прототип кейс-чемпионата). Отправляя заявку, вы даёте согласие на обработку: возраста, дохода, занятости, семейного положения, суммы и срока кредита, отпечатка паспорта и номера телефона.</p>
+        <p><b>Цель</b> — предварительное решение по кредиту и понятное объяснение его причины.</p>
+        <p><b>Мы не собираем</b> номер паспорта, ФИО, адрес, пол и национальность. Номер паспорта обрабатывается только на вашем устройстве: на сервер уходит необратимый отпечаток, восстановить номер из него нельзя.</p>
+        <p><b>Хранение.</b> Заявки и решения хранятся в защищённом журнале — удалять записи нельзя ни одной роли, это требование к аудиту. Данные в журнале обезличены: вместо паспорта и телефона — отпечатки и маски.</p>
+        <p><b>Отзыв согласия.</b> Напишите в поддержку — обработку вашей заявки прекратим; записи аудита сохраняются в обезличенном виде в силу закона.</p>
+        <p class="dim">Это учебный прототип: реальные кредиты не выдаются, данные клиентов не собираются.</p>
+        <div class="dialog-nav"><button class="btn primary" onclick={() => (consentOpen = false)}>Понятно</button></div>
+      </div>
+    </div>
+  {/if}
 </div>
 
 {#if quote && step < 4}
@@ -325,6 +348,15 @@
   .grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(280px, 1fr); gap: 22px; align-items: start; }
   .side { position: sticky; top: 84px; }
   .form { display: flex; flex-direction: column; gap: 20px; }
+  .consent { display: flex; align-items: flex-start; gap: 10px; font-size: 14px; color: var(--c-muted); cursor: pointer; }
+  .consent input { margin-top: 3px; width: 17px; height: 17px; accent-color: var(--c-accent); flex: none; }
+  .consent .link { border: 0; background: none; padding: 0; font: inherit; color: var(--c-accent); text-decoration: underline; cursor: pointer; }
+  .overlay { position: fixed; inset: 0; z-index: 60; background: rgba(15, 17, 22, .55); display: grid; place-items: center; padding: 20px; }
+  .dialog { background: var(--c-panel, #fff); color: var(--text); border-radius: 16px; padding: 22px 24px; max-width: 560px; max-height: 82vh; overflow: auto; box-shadow: 0 24px 60px rgba(0,0,0,.25); }
+  .dialog h3 { margin: 0 0 12px; font-size: 18px; }
+  .dialog p { margin: 9px 0; font-size: 14.5px; line-height: 1.55; }
+  .dialog .dim { color: var(--c-muted); font-size: 13px; }
+  .dialog-nav { display: flex; justify-content: flex-end; margin-top: 14px; }
   .fields { display: flex; flex-direction: column; gap: 22px; }
   .pair { display: flex; align-items: center; gap: 10px; }
   .pair .input { font-size: 20px; font-weight: 600; }

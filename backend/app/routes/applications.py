@@ -190,14 +190,15 @@ async def create(request: Request, user: User = Depends(require_roles("client"))
     replay = saved_response(state, full_key, digest)
     if replay:
         return replay
-    app, device_id = parse_form(body)
+    app, device_id = parse_form(body, need_consent=True)
     hits = check_rate(state, user.username)
     # после await могла прийти такая же заявка параллельно — проверяем ещё раз, без пауз до создания
     replay = saved_response(state, full_key, digest)
     if replay:
         return replay
     check_duplicate(state, app.passport_hash)
-    app_id = create_application(state, app, user.username, device_id=device_id, idempotency_key=key)
+    app_id = create_application(state, app, user.username, device_id=device_id, idempotency_key=key,
+                                consent=body.get("consent") is True)
     state.create_hits[user.username] = hits
     response = {"app_id": app_id, "status": "PROCESSING"}
     state.db.execute("INSERT INTO idempotency VALUES (?,?,?,?)", (full_key, digest, dumps(response), now_iso()))

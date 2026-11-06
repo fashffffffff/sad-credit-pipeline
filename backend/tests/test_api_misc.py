@@ -123,3 +123,25 @@ async def test_events_stream_requires_ticket_and_old_paths_are_gone(env, uw):
     assert (await env.client.get("/api/v1/events/stream")).status_code == 401
     for old in ("/api/applications", "/api/auth/login", "/api/health"):
         assert (await env.client.get(old, headers=uw)).status_code == 404
+
+
+async def test_application_requires_consent(env, client):
+    """Подача заявки без согласия на обработку данных — 422; расчёт до подачи согласие не требует."""
+    no_consent = {k: v for k, v in good_form().items() if k != "consent"}
+    r = await env.submit(no_consent, client)
+    assert r.status_code == 422 and r.json()["error_code"] == "CONSENT_REQUIRED"
+    assert "согласие" in r.json()["details"]["fields"]["consent"].lower()
+    r = await env.submit(good_form() | {"consent": "yes"}, client)
+    assert r.status_code == 422 and r.json()["error_code"] == "CONSENT_REQUIRED"
+    # расчёт до подачи работает и без согласия — это не подача заявки
+    quote_form = {k: v for k, v in good_form().items() if k not in ("passport_hash", "consent")}
+    assert (await env.client.post("/api/v1/quote", json=quote_form, headers=client)).status_code == 200
+    # с согласием заявка создаётся, факт согласия — в аудите
+    r = await env.submit(good_form(), client)
+    assert r.status_code == 201
+    app_id = r.json()["app_id"]
+    events = (await env.client.get("/api/v1/audit", headers=await env.login("audit"))).json()
+    items = events["items"] if isinstance(events, dict) else events
+    created = next(e for e in items if e["app_id"] == app_id and e["action"] == "application_created")
+    assert created["details"]["consent_accepted"] is True
+    await env.client.aclose()
