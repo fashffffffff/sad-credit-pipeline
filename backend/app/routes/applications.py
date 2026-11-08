@@ -5,7 +5,7 @@ import json
 import re
 
 import credit_core
-from credit_core.rules import AMOUNT_MULTIPLIER, MAX_DTI
+from credit_core.rules import AMOUNT_MULTIPLIER, DTI_RATE, MAX_DTI
 from credit_core import Decision
 from fastapi import APIRouter, Depends, Header, Request, Response
 from fastapi.responses import JSONResponse
@@ -162,7 +162,7 @@ async def quote(request: Request, user: User = Depends(require_roles("client")),
         recommendations = [{**o, "preliminary": True} for o in credit_core.counter_offers(
             app, credit_core.BkiResult(score=700), "MATCH", reason)]
     return {"status": "product_mismatch" if problems else "ready",
-            "dti": round(payment / app.income, 2), "monthly_payment": round(payment),
+            "dti": round(credit_core.compute_dti(app.amount, app.term, app.income, DTI_RATE), 2), "monthly_payment": round(payment),
             "total_payment": round(payment * app.term), "overpayment": round(payment * app.term - app.amount),
             "partial_score": sum(p["points"] for p in parts) if profile_complete else None,
             "max_partial_score": 90,
@@ -176,7 +176,7 @@ async def quote(request: Request, user: User = Depends(require_roles("client")),
 def _max_amount_hint(app) -> int:
     """Наибольшая сумма на этот срок, которая пройдёт DTI и лимит 10 доходов (кратно 10 000 ₽)."""
     product = credit_core.PRODUCTS[app.product_id]
-    by_dti = credit_core.max_amount_for_dti(app.term, app.income, product.rate, MAX_DTI + 0.005)
+    by_dti = credit_core.max_amount_for_dti(app.term, app.income, DTI_RATE, MAX_DTI + 0.005)
     return int(min(by_dti, AMOUNT_MULTIPLIER * app.income, product.max_amount) // 10_000 * 10_000)
 
 

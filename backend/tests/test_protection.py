@@ -155,7 +155,7 @@ async def test_duplicate_application_for_same_passport(env, client):
     # ручная проверка блокирует
     env.world.bki_default = {"score": 580, "delinquency": False, "requests_90d": 1}
     held = await env.run(good_form(passport_hash="aaaaaaaaaaaaaaaa", age=24, employment="student", family="single",
-                                   income=45000, amount=100000, product_id="prod_student"), client)
+                                   income=45000, amount=100000, product_id="prod_express"), client)
     assert held["status"] == "MANUAL_REVIEW"
     again = await env.submit(good_form(passport_hash="aaaaaaaaaaaaaaaa"), client)
     assert again.status_code == 409

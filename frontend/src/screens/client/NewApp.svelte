@@ -199,7 +199,7 @@
           <p id="product-hint" class="dim small">
             {#if product}
               {choice === 'auto' ? `Предварительно выбран «${product.name}». ` : ''}Ставка {fmtPct(product.rate)} годовых · сумма {fmtMoney(product.min_amount)}–{fmtMoney(product.max_amount)}, не более 10 месячных доходов · срок {product.min_term}–{product.max_term} мес. · возраст {product.min_age}–{product.max_age} лет · доход от {fmtMoney(product.min_income)}.
-              {#if (age == null || ageError) && ['prod_student', 'prod_pension'].includes(product.product_id)}Проверим возраст на следующем шаге.
+              {#if (age == null || ageError) && (product.min_age > 18 || product.max_age < 70)}Проверим возраст на следующем шаге.
               {:else if !profileComplete}Уточним соответствие после заполнения профиля.{/if}
             {:else}Выберем минимальную ставку по сумме, доходу и известному возрасту. Срок не влияет на выбор продукта.{/if}
           </p>

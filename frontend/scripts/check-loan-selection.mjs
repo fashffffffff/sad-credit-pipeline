@@ -4,9 +4,9 @@ const server = await createServer({ server: { middlewareMode: true }, appType: '
 try {
   const { autoProduct } = await server.ssrLoadModule('/src/lib/products.ts')
   const { PRODUCTS } = await server.ssrLoadModule('/src/lib/mockCore.ts')
-  assert.equal(autoProduct(PRODUCTS, 100000, 200000, null).product_id, 'prod_premium')
-  assert.equal(autoProduct(PRODUCTS, 100000, 200000, 22).product_id, 'prod_student')
-  assert.equal(autoProduct(PRODUCTS, 100000, 50000, 60).product_id, 'prod_pension')
+  assert.equal(autoProduct(PRODUCTS, 600000, 200000, null).product_id, 'prod_premium')
+  assert.equal(autoProduct(PRODUCTS, 600000, 200000, 20).product_id, 'prod_standard')  // премиум с 21 года
+  assert.equal(autoProduct(PRODUCTS, 100000, 25000, 30).product_id, 'prod_express')    // стандарт от 30 000 ₽ дохода
   const { quoteOf } = await server.ssrLoadModule('/src/lib/mockQuote.ts')
   const base = { age: 30, income: 3430000, employment: 'employed', family: 'single', amount: 5000000, term: 3, product_id: 'prod_premium', amount_priority: 8, profile_complete: true }
   const mismatch = quoteOf(base)
@@ -16,9 +16,9 @@ try {
   assert.ok(mismatch.eligible_products.some(p => p.product_id === 'prod_premium'))
   assert.ok(mismatch.recommendations.some(o => o.amount === 5000000 && o.term >= 12))
   assert.ok(mismatch.recommendations.every(o => o.preliminary && o.total_payment > o.amount && o.amount_delta === o.amount - base.amount && o.term_delta === o.term - base.term))
-  const wrongAge = quoteOf({ ...base, age: 30, income: 200000, amount: 100000, term: 12, product_id: 'prod_student' })
+  const wrongAge = quoteOf({ ...base, age: 65, income: 200000, amount: 100000, term: 12, product_id: 'prod_express' })
   assert.equal(wrongAge.status, 'product_mismatch')
-  assert.ok(wrongAge.recommendations.every(o => o.product_id !== 'prod_student'))
+  assert.ok(wrongAge.recommendations.every(o => o.product_id !== 'prod_express'))
   const incomplete = quoteOf({ ...base, profile_complete: false })
   assert.equal(incomplete.partial_score, null)
   assert.deepEqual(incomplete.blocking, [])
@@ -34,8 +34,8 @@ try {
   assert.equal(amountFirst.amount, base.amount)
   assert.equal(termFirst.term, base.term)
   assert.notEqual(amountFirst.product_id, termFirst.product_id)
-  for (const product_id of ['prod_student', 'prod_pension']) {
-    const unknownAge = quoteOf({ ...base, product_id, amount: 100000, term: 12, age_known: false, profile_complete: false })
+  for (const [product_id, amount] of [['prod_express', 100000], ['prod_premium', 600000]]) {
+    const unknownAge = quoteOf({ ...base, product_id, amount, term: 12, age: 70, age_known: false, profile_complete: false })
     assert.equal(unknownAge.status, 'ready')
     assert.ok(unknownAge.monthly_payment > 0)
     assert.equal(unknownAge.partial_score, null)

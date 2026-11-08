@@ -1,11 +1,11 @@
 import type { Quote, QuoteRequest } from './types'
-import { PRODUCTS, productById, computeDti, productProblems, evaluate, counterOffers, monthlyPayment, partialScore, eligibleProducts, type CoreApp } from './mockCore'
+import { DTI_RATE, PRODUCTS, productById, computeDti, productProblems, evaluate, counterOffers, monthlyPayment, partialScore, eligibleProducts, type CoreApp } from './mockCore'
 
 export function quoteOf(q: QuoteRequest): Quote {
   const product = productById(q.product_id)
   const effectiveAge = q.age_known === false ? Math.max(product.min_age, Math.min(product.max_age, q.age)) : q.age
   const app: CoreApp = { app_id: 'quote', ...q, age: effectiveAge }
-  const dti = Math.round(computeDti(q.amount, q.term, q.income, product.rate) * 100) / 100
+  const dti = Math.round(computeDti(q.amount, q.term, q.income, DTI_RATE) * 100) / 100
   const fields: Record<string, string> = {}
   if (!(q.income > 0)) fields.income = 'Укажите доход'
   if (!(q.amount >= 10000 && q.amount <= 5000000)) fields.amount = 'Сумма — от 10 000 до 5 000 000 ₽'

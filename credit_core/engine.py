@@ -63,7 +63,8 @@ def evaluate(app: Application, bki: BkiResult | None = None, smev: str | None = 
     errors = [e for e in validate_fields(app) if e.field != "passport_hash"]
     if not errors:
         d.monthly_payment = monthly_payment(app.amount, app.term, product.rate)
-        d.dti = compute_dti(app.amount, app.term, app.income, product.rate)
+        # DTI — по формуле кейса с фиксированной ставкой 18%; платёж клиенту — по ставке продукта
+        d.dti = compute_dti(app.amount, app.term, app.income, rules.DTI_RATE)
         d.score, d.breakdown, d.score_capped_to_zero = score_breakdown(app, bki)
 
     # Правила 1–2 можно проверить, даже если другие поля пустые

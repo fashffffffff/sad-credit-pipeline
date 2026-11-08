@@ -168,10 +168,11 @@ def test_annuity_formula():
 
 
 def test_products_loaded_from_csv():
-    assert set(PRODUCTS) == {"prod_standard", "prod_premium", "prod_student", "prod_pension", "prod_express"}
+    assert set(PRODUCTS) == {"prod_standard", "prod_premium", "prod_express"}
     assert PRODUCTS["prod_standard"].rate == 0.18
     ids = [p.product_id for p in eligible_products(age=20, income=50_000)]
-    assert ids[0] == "prod_student" and "prod_premium" not in ids and "prod_pension" not in ids
+    assert ids == ["prod_standard", "prod_express"]  # премиум: возраст от 21 и доход от 150 000 ₽
+    assert [p.product_id for p in eligible_products(age=64, income=200_000)] == ["prod_premium", "prod_standard"]
 
 
 def test_api_validation():
@@ -179,8 +180,8 @@ def test_api_validation():
     assert validate_for_api(base(age=71))[0].code == "AGE_OUT_OF_RANGE"
     assert validate_for_api(base(family="divorced"))[0].code == "INVALID_FAMILY"
     assert validate_for_api(base(passport_hash="XYZ"))[0].code == "INVALID_PASSPORT_HASH"
-    err = validate_for_api(base(product_id="prod_student", age=32))[0]
-    assert err.code == "PRODUCT_MISMATCH" and "18–25" in err.message
+    err = validate_for_api(base(product_id="prod_express", age=65, amount=100_000, term=12))[0]
+    assert err.code == "PRODUCT_MISMATCH" and "18–60" in err.message
     codes = {e.code for e in validate_fields(base(age=None, term=None))}
     assert codes == {"MISSING_AGE", "MISSING_TERM"}
 
@@ -233,3 +234,15 @@ def test_emulator_formulas_follow_spec():
 def test_validation_rejects_garbage_types_and_huge_income():
     assert validate_fields(base(passport_hash=12345))[0].code == "INVALID_PASSPORT_HASH"
     assert validate_fields(base(income=1e12))[0].code == "INVALID_INCOME"
+
+
+def test_dti_uses_fixed_18_percent_rate():
+    """По правилам кейса (02_правила, раздел 4) DTI считается по ставке 18% для любого продукта,
+    а платёж клиенту — по ставке выбранного продукта."""
+    app = base(product_id="prod_premium", income=200_000, amount=4_000_000, term=60)
+    d = evaluate(app, bki=GOOD_BKI, smev="MATCH")
+    assert d.dti == compute_dti(4_000_000, 60, 200_000, 0.18)
+    assert round(d.monthly_payment) == round(monthly_payment(4_000_000, 60, 0.15))
+    # по ставке 15% было бы 0,48 и одобрение, по формуле кейса 0,51 — отказ
+    assert round(compute_dti(4_000_000, 60, 200_000, 0.15), 2) <= 0.5 < round(d.dti, 2)
+    assert (d.decision, d.reason) == ("REFUSED", "HIGH_DTI")

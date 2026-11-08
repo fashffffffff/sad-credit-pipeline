@@ -31,7 +31,7 @@ from credit_core import emulation  # noqa: E402
 
 URL = os.environ.get("BACKEND_URL", "http://127.0.0.1:8000")  # переопределяется флагом --base-url
 FORM = {"age": 32, "income": 120000, "employment": "employed", "family": "married", "amount": 500000, "term": 24,
-        "product_id": "prod_standard"}
+        "product_id": "prod_standard", "consent": True}  # согласие на обработку данных обязательно при подаче
 
 
 def passport_with_bki(good: bool) -> str:
@@ -167,7 +167,7 @@ def case_t2_4(api: Api):
     c = Checks()
     client = api.new_client()
     app, secs = api.run(client, FORM | {"passport_hash": passport_with_bki(True), "age": 20, "income": 25000, "amount": 50000,
-                                       "employment": "student", "family": "single", "product_id": "prod_student"})
+                                       "employment": "student", "family": "single", "product_id": "prod_express"})
     calls = externals(api, app["app_id"])
     c.fact("доход 25 000 ₽: " + summary(app, secs) + f"; вызовов БКИ/СМЭВ: {len(calls)}; smev={app['decision']['smev']}")
     c.check(app["status"] == "REFUSED" and app["decision"]["reason"] == "LOW_INCOME", "ожидался REFUSED LOW_INCOME")

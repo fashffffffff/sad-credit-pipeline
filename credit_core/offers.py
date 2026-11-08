@@ -47,7 +47,7 @@ def _try(app: Application, bki: BkiResult, smev: str, product: Product, amount: 
 
 
 def _max_amount(app: Application, product: Product, term: int) -> float:
-    by_dti = max_amount_for_dti(term, app.income, product.rate, rules.MAX_DTI + 0.005)
+    by_dti = max_amount_for_dti(term, app.income, rules.DTI_RATE, rules.MAX_DTI + 0.005)
     cap = min(by_dti, rules.AMOUNT_MULTIPLIER * app.income, product.max_amount, app.amount)
     return math.floor(cap / STEP) * STEP
 

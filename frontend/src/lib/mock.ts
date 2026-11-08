@@ -275,11 +275,11 @@ async function seed() {
   const now = Date.now()
   const rows: [number, number, Employment, Family, number, number, string][] = [
     [32, 120000, 'employed', 'married', 500000, 24, 'prod_standard'],
-    [19, 15000, 'student', 'single', 100000, 12, 'prod_student'],
+    [19, 15000, 'student', 'single', 100000, 12, 'prod_express'],
     [45, 200000, 'employed', 'children', 1000000, 36, 'prod_standard'],
     [28, 52000, 'employed', 'single', 900000, 12, 'prod_standard'],
-    [22, 35000, 'student', 'single', 90000, 12, 'prod_student'],
-    [58, 70000, 'retired', 'married', 250000, 24, 'prod_pension'],
+    [22, 35000, 'student', 'single', 90000, 12, 'prod_express'],
+    [58, 70000, 'retired', 'married', 250000, 24, 'prod_standard'],
     [41, 95000, 'self-employed', 'children', 700000, 36, 'prod_standard'],
     [36, 160000, 'employed', 'married', 2000000, 48, 'prod_premium'],
     [29, 45000, 'employed', 'single', 150000, 18, 'prod_express'],
@@ -287,7 +287,7 @@ async function seed() {
     [31, 80000, 'employed', 'single', 400000, 24, 'prod_standard'],
     [47, 110000, 'self-employed', 'married', 600000, 36, 'prod_standard'],
     [24, 60000, 'employed', 'single', 200000, 12, 'prod_standard'],
-    [64, 40000, 'retired', 'married', 120000, 12, 'prod_pension'],
+    [64, 40000, 'retired', 'married', 120000, 12, 'prod_standard'],
     [38, 140000, 'employed', 'children', 800000, 36, 'prod_standard'],
     [26, 30000, 'employed', 'single', 400000, 12, 'prod_standard'],
   ]

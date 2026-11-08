@@ -6,12 +6,12 @@ export const RULES_VERSION = '2026.11-1'
 const MIN_SCORE = 60, MAX_DTI = 0.5, AMOUNT_MULTIPLIER = 10, MIN_INCOME = 30000, MIN_AGE = 18, MAX_AGE = 70, BKI_REFUSE_BELOW = 550, BKI_DELINQUENT_BELOW = 500
 
 export const PRODUCTS: Product[] = [
-  { product_id: 'prod_standard', name: 'Потребительский стандарт', min_amount: 10000, max_amount: 1000000, min_term: 3, max_term: 60, rate: 0.18, min_age: 18, max_age: 70, min_income: 30000 },
-  { product_id: 'prod_premium', name: 'Потребительский премиум', min_amount: 100000, max_amount: 5000000, min_term: 12, max_term: 60, rate: 0.15, min_age: 25, max_age: 65, min_income: 150000 },
-  { product_id: 'prod_student', name: 'Студенческий', min_amount: 10000, max_amount: 300000, min_term: 3, max_term: 36, rate: 0.12, min_age: 18, max_age: 25, min_income: 10000 },
-  { product_id: 'prod_pension', name: 'Пенсионный', min_amount: 10000, max_amount: 500000, min_term: 3, max_term: 24, rate: 0.16, min_age: 55, max_age: 70, min_income: 20000 },
-  { product_id: 'prod_express', name: 'Экспресс-кредит', min_amount: 10000, max_amount: 300000, min_term: 3, max_term: 24, rate: 0.22, min_age: 18, max_age: 70, min_income: 40000 },
+  { product_id: 'prod_standard', name: 'Стандартный кредит', min_amount: 10000, max_amount: 1000000, min_term: 3, max_term: 60, rate: 0.18, min_age: 18, max_age: 70, min_income: 30000 },
+  { product_id: 'prod_express', name: 'Экспресс-кредит', min_amount: 10000, max_amount: 300000, min_term: 3, max_term: 24, rate: 0.22, min_age: 18, max_age: 60, min_income: 20000 },
+  { product_id: 'prod_premium', name: 'Премиальный кредит', min_amount: 500000, max_amount: 5000000, min_term: 12, max_term: 60, rate: 0.15, min_age: 21, max_age: 65, min_income: 150000 },
 ]
+// DTI по правилам кейса считается по фиксированной ставке 18% для любого продукта
+export const DTI_RATE = 0.18
 export const productById = (id: string) => PRODUCTS.find((p) => p.product_id === id) ?? PRODUCTS[0]
 
 export const monthlyPayment = (amount: number, term: number, rate: number) => {
@@ -90,7 +90,7 @@ export function evaluate(a: CoreApp, bki: CoreBki | null = null, smev: string | 
   const missing = (['income', 'age', 'employment', 'family', 'amount', 'term'] as const).filter((f) => empty(a[f]))
   if (!missing.length) {
     r.monthly_payment = Math.round(monthlyPayment(a.amount!, a.term!, product.rate))
-    r.dti = Math.round(computeDti(a.amount!, a.term!, a.income!, product.rate) * 100) / 100
+    r.dti = Math.round(computeDti(a.amount!, a.term!, a.income!, DTI_RATE) * 100) / 100
     const s = scoreBreakdown(a, bki)
     r.score = s.score; r.breakdown = s.parts
   }
@@ -141,7 +141,7 @@ export function counterOffers(a: CoreApp, bki: CoreBki, smev: string, reason: st
     return { product_id: p.product_id, product_name: p.name, amount, term, rate: p.rate, monthly_payment: res.monthly_payment!, dti: res.dti!, score: res.score! }
   }
   const maxAmount = (p: Product, term: number) => {
-    const lim = Math.min(maxAmountForDti(term, a.income!, p.rate, MAX_DTI + 0.005), AMOUNT_MULTIPLIER * a.income!, p.max_amount, a.amount!)
+    const lim = Math.min(maxAmountForDti(term, a.income!, DTI_RATE, MAX_DTI + 0.005), AMOUNT_MULTIPLIER * a.income!, p.max_amount, a.amount!)
     return Math.floor(lim / STEP) * STEP
   }
   const offers: Offer[] = []

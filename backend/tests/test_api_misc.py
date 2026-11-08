@@ -22,7 +22,7 @@ async def test_health_degraded_when_model_missing(env_no_model):
 
 async def test_products_and_quote(env, client, uw):
     products = (await env.client.get("/api/v1/products", headers=client)).json()
-    assert {p["product_id"] for p in products} == {"prod_standard", "prod_premium", "prod_student", "prod_pension", "prod_express"}
+    assert {p["product_id"] for p in products} == {"prod_standard", "prod_premium", "prod_express"}
     form = {k: v for k, v in good_form().items() if k != "passport_hash"}
     q = (await env.client.post("/api/v1/quote", json=form, headers=client)).json()
     assert q["dti"] == 0.21 and q["monthly_payment"] == 24962 and q["partial_score"] == 80 and q["max_partial_score"] == 90

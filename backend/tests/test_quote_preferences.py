@@ -51,8 +51,9 @@ def test_existing_database_gets_priority_without_losing_applications(tmp_path):
     migrated.conn.close()
 
 
-async def test_unknown_age_does_not_falsely_reject_student_product(env,client):
-    q=(await quote(env,client,amount=100_000,term=12,product_id='prod_student',age=30,age_known=False,profile_complete=False)).json()
+async def test_unknown_age_does_not_falsely_reject_age_limited_product(env,client):
+    # экспресс — до 60 лет; пока дата рождения не введена, возраст не выдумываем и продукт не отклоняем
+    q=(await quote(env,client,amount=100_000,term=12,product_id='prod_express',age=65,age_known=False,profile_complete=False)).json()
     assert q['status']=='ready' and q['partial_score'] is None
     assert 'product_id' not in q['fields']
-    assert 'prod_student' in {p['product_id'] for p in q['eligible_products']}
+    assert 'prod_express' in {p['product_id'] for p in q['eligible_products']}

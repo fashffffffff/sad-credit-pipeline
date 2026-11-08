@@ -45,7 +45,7 @@ async def test_t2_3_missing_income_is_422(env, client):
 
 async def test_t2_4_low_income_local_rules_skip_external(env, client):
     """Правила 1–5 сработали → СМЭВ и БКИ не вызываем (NOT_CALLED), в external_requests пусто."""
-    d = await env.run(good_form(income=25000, amount=50000, product_id="prod_student", age=20), client)
+    d = await env.run(good_form(income=25000, amount=50000, product_id="prod_express", age=20), client)
     assert d["decision"]["reason"] == "LOW_INCOME" and d["status"] == "REFUSED"
     assert env.world.calls["smev"] == 0 and env.world.calls["bki"] == 0 and env.world.calls["report"] == 0
     assert d["decision"]["smev"] == "NOT_CALLED" and d["decision"]["bki"] is None
@@ -205,7 +205,7 @@ async def test_manual_review_and_underwriter_decision(env, client, uw):
     # балл < 60 → MANUAL_REVIEW / LOW_SCORE: студент, 600–699 БКИ
     env.world.bki_default = {"score": 580, "delinquency": False, "requests_90d": 1}
     d = await env.run(good_form(age=24, employment="student", family="single", income=45000, amount=100000,
-                                product_id="prod_student"), client)
+                                product_id="prod_express"), client)
     assert d["status"] == "MANUAL_REVIEW" and d["decision"]["reason"] == "LOW_SCORE"
     r = await env.client.post(f"/api/v1/applications/{d['app_id']}/review", headers=uw,
                               json={"decision": "APPROVED", "comment": "доход подтверждён"})
@@ -224,7 +224,7 @@ async def test_manual_review_and_underwriter_decision(env, client, uw):
 async def test_review_refusal_has_client_text(env, client, uw):
     env.world.bki_default = {"score": 580, "delinquency": False, "requests_90d": 1}
     d = await env.run(good_form(age=24, employment="student", family="single", income=45000, amount=100000,
-                                product_id="prod_student"), client)
+                                product_id="prod_express"), client)
     r = await env.client.post(f"/api/v1/applications/{d['app_id']}/review", headers=uw,
                               json={"decision": "REFUSED", "comment": "x"})
     assert r.json()["reason"] == "MANUAL_REFUSED"
